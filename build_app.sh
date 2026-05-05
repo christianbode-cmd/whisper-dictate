@@ -175,27 +175,137 @@ if [ -d "$APP_PATH" ]; then
     DMG_NAME="Whisper Dictate"
     DMG_PATH="$SCRIPT_DIR/dist/Whisper Dictate.dmg"
     DMG_STAGING="$SCRIPT_DIR/dist/dmg_staging"
+    DMG_TMP="$SCRIPT_DIR/dist/WD_tmp.dmg"
 
     echo "Creating DMG installer..."
 
     rm -rf "$DMG_STAGING"
-    mkdir -p "$DMG_STAGING"
+    mkdir -p "$DMG_STAGING/.background"
 
-    # Copy app and add /Applications symlink for drag-to-install
+    # Generate background image using AppKit (already available in the venv)
+    "$VENV_DIR/bin/python3" << 'BG_SCRIPT'
+import AppKit, Foundation
+
+W, H = 600, 380
+img = AppKit.NSImage.alloc().initWithSize_((W, H))
+img.lockFocus()
+
+# Background — light warm-grey
+AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.93, 0.93, 0.95, 1.0).setFill()
+AppKit.NSBezierPath.fillRect_(((0, 0), (W, H)))
+
+# Arrow between icon positions (AppKit origin is bottom-left)
+arrow = AppKit.NSBezierPath.bezierPath()
+arrow.setLineWidth_(2.5)
+arrow.moveToPoint_((245, 210))
+arrow.lineToPoint_((355, 210))
+arrow.moveToPoint_((340, 196))
+arrow.lineToPoint_((355, 210))
+arrow.lineToPoint_((340, 224))
+AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.5, 0.5, 0.55, 1.0).setStroke()
+arrow.stroke()
+
+# Centered paragraph style
+para = AppKit.NSMutableParagraphStyle.alloc().init()
+para.setAlignment_(AppKit.NSTextAlignmentCenter)
+
+# Main instruction
+Foundation.NSString.stringWithString_(
+    "Drag Whisper Dictate to Applications to install"
+).drawInRect_withAttributes_(((0, 108), (W, 24)), {
+    AppKit.NSFontAttributeName: AppKit.NSFont.systemFontOfSize_(13),
+    AppKit.NSForegroundColorAttributeName: AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.2, 0.2, 0.25, 1.0),
+    AppKit.NSParagraphStyleAttributeName: para,
+})
+
+# Gatekeeper note
+Foundation.NSString.stringWithString_(
+    "First launch: right-click → Open if macOS says the app cannot be opened"
+).drawInRect_withAttributes_(((0, 56), (W, 22)), {
+    AppKit.NSFontAttributeName: AppKit.NSFont.systemFontOfSize_(11),
+    AppKit.NSForegroundColorAttributeName: AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.5, 0.5, 0.55, 1.0),
+    AppKit.NSParagraphStyleAttributeName: para,
+})
+
+img.unlockFocus()
+
+tiff = img.TIFFRepresentation()
+bitmap = AppKit.NSBitmapImageRep.alloc().initWithData_(tiff)
+png = bitmap.representationUsingType_properties_(AppKit.NSBitmapImageFileTypePNG, {})
+png.writeToFile_atomically_("dist/dmg_staging/.background/background.png", True)
+print("Background image created.")
+BG_SCRIPT
+
+    # Copy app and Applications symlink
     cp -R "$APP_PATH" "$DMG_STAGING/"
     ln -s /Applications "$DMG_STAGING/Applications"
 
-    # Remove any previous DMG
-    rm -f "$DMG_PATH"
+    rm -f "$DMG_PATH" "$DMG_TMP"
 
+    # Create a read-write HFS+ DMG so Finder background images work
     hdiutil create \
         -volname "$DMG_NAME" \
         -srcfolder "$DMG_STAGING" \
-        -ov \
-        -format UDZO \
-        -imagekey zlib-level=9 \
-        "$DMG_PATH" > /dev/null
+        -fs HFS+J \
+        -ov -format UDRW \
+        "$DMG_TMP" > /dev/null
 
+    # Mount it (volume name = DMG_NAME → /Volumes/$DMG_NAME)
+    MOUNT_POINT="/Volumes/$DMG_NAME"
+    hdiutil attach -readwrite -noverify -noautoopen "$DMG_TMP" > /dev/null
+
+    sleep 3
+
+    # Configure the Finder window: background, icon positions, window size.
+    # Retry loop handles the case where Finder hasn't registered the disk yet.
+    osascript << APPLESCRIPT
+tell application "Finder"
+    set myDisk to missing value
+    repeat 10 times
+        try
+            set myDisk to disk "$DMG_NAME"
+            exit repeat
+        on error
+            delay 1
+        end try
+    end repeat
+    if myDisk is missing value then error "Disk not found"
+    tell myDisk
+        open
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set bounds of container window to {200, 120, 800, 500}
+        set theViewOptions to icon view options of container window
+        set arrangement of theViewOptions to not arranged
+        set icon size of theViewOptions to 100
+        set background picture of theViewOptions to (alias POSIX file "$MOUNT_POINT/.background/background.png")
+        set position of item "Whisper Dictate.app" to {160, 210}
+        set position of item "Applications" to {440, 210}
+        close
+        open
+        update without registering applications
+        delay 2
+        close
+    end tell
+end tell
+APPLESCRIPT
+
+    sleep 2
+    # Eject via Finder first, then force-detach as fallback
+    osascript -e "tell application \"Finder\" to if disk \"$DMG_NAME\" exists then eject disk \"$DMG_NAME\"" 2>/dev/null || true
+    sleep 2
+    hdiutil detach "$MOUNT_POINT" -force > /dev/null 2>&1 || true
+    # Wait until the volume is fully gone before converting
+    for i in $(seq 1 10); do
+        mount | grep -q "$MOUNT_POINT" || break
+        sleep 1
+    done
+
+    # Convert to compressed read-only DMG
+    hdiutil convert "$DMG_TMP" -format UDZO -imagekey zlib-level=9 \
+        -o "$DMG_PATH" > /dev/null
+    rm -f "$DMG_TMP"
     rm -rf "$DMG_STAGING"
 
     echo ""

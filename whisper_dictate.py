@@ -11,6 +11,7 @@ import logging
 import os
 import queue
 import signal
+import subprocess
 import sys
 import tempfile
 import threading
@@ -83,7 +84,6 @@ CONFIG_PATH = find_config_path()
 log.info(f"Config path: {CONFIG_PATH}")
 
 DEFAULT_CONFIG = {
-    "openai_api_key": "",
     "hotkey_keycode": 58,
     "model": "gpt-4o-transcribe",
     "language": "en",
@@ -93,31 +93,80 @@ DEFAULT_CONFIG = {
     "sound_on_stop": True,
 }
 
+# ---------------------------------------------------------------------------
+# Keychain — API key storage
+# ---------------------------------------------------------------------------
+_KC_SERVICE = "WhisperDictate"
+_KC_ACCOUNT = "OpenAIAPIKey"
+
+def keychain_get_api_key():
+    """Return the stored API key, or None if not set."""
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password",
+             "-s", _KC_SERVICE, "-a", _KC_ACCOUNT, "-w"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            key = result.stdout.strip()
+            return key or None
+    except Exception as e:
+        log.warning(f"Keychain read error: {e}")
+    return None
+
+def keychain_save_api_key(key):
+    """Store (or delete) the API key in the macOS Keychain."""
+    try:
+        subprocess.run(
+            ["security", "delete-generic-password",
+             "-s", _KC_SERVICE, "-a", _KC_ACCOUNT],
+            capture_output=True,
+        )
+        if key:
+            result = subprocess.run(
+                ["security", "add-generic-password",
+                 "-s", _KC_SERVICE, "-a", _KC_ACCOUNT, "-w", key],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                log.error(f"Keychain write failed: {result.stderr.strip()}")
+                return False
+        log.info("API key saved to Keychain")
+        return True
+    except Exception as e:
+        log.error(f"Keychain write error: {e}")
+        return False
+
 def load_config():
     if not os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "w") as f:
             json.dump(DEFAULT_CONFIG, f, indent=2)
-        log.error(f"Config created at {CONFIG_PATH} — add your OpenAI API key and re-run.")
-        sys.exit(0)
+        log.info(f"Config created at {CONFIG_PATH}")
 
     with open(CONFIG_PATH) as f:
         cfg = json.load(f)
 
     merged = {**DEFAULT_CONFIG, **cfg}
 
-    if not merged.get("openai_api_key") or merged["openai_api_key"] == "sk-YOUR-KEY-HERE":
-        log.error(f"openai_api_key is empty or placeholder in {CONFIG_PATH}")
-        sys.exit(1)
+    # One-time migration: if the key is still in config.json, move it to
+    # the Keychain and scrub it from the file.
+    legacy_key = merged.pop("openai_api_key", None)
+    if legacy_key and legacy_key not in ("", "sk-YOUR-KEY-HERE"):
+        if not keychain_get_api_key():
+            keychain_save_api_key(legacy_key)
+            log.info("Migrated API key from config.json to Keychain")
+        save_config(merged)
 
     log.info(f"Config loaded. Model: {merged['model']}, Language: {merged['language']}, Keycode: {merged['hotkey_keycode']}")
     return merged
 
 
 def save_config(config):
-    """Persist config dict back to CONFIG_PATH."""
+    """Persist config dict to CONFIG_PATH. API key is never written here."""
     try:
+        safe = {k: v for k, v in config.items() if k != "openai_api_key"}
         with open(CONFIG_PATH, "w") as f:
-            json.dump(config, f, indent=2)
+            json.dump(safe, f, indent=2)
         log.info(f"Config saved: {CONFIG_PATH}")
         return True
     except Exception as e:
@@ -308,6 +357,11 @@ class ClipboardPaster:
 # Transcription
 # ---------------------------------------------------------------------------
 def transcribe(filepath, config):
+    api_key = keychain_get_api_key()
+    if not api_key:
+        log.error("No API key in Keychain — open Preferences to add one")
+        return None
+
     if not os.path.exists(filepath):
         log.error(f"Recording file not found: {filepath}")
         return None
@@ -318,7 +372,7 @@ def transcribe(filepath, config):
     if file_size < 1000:
         log.warning(f"Recording file very small ({file_size} bytes) — may be empty/silent")
 
-    client = OpenAI(api_key=config["openai_api_key"])
+    client = OpenAI(api_key=api_key)
 
     kwargs = {
         "model": config["model"],
@@ -463,8 +517,7 @@ class PreferencesWindowController(AppKit.NSObject):
         self._cleanup_capture()
         self._config["hotkey_keycode"] = self._pending_keycode
         api_key = self._api_key_field.stringValue().strip()
-        if api_key:
-            self._config["openai_api_key"] = api_key
+        keychain_save_api_key(api_key)
         save_config(self._config)
         if self._on_save:
             self._on_save(self._config)
@@ -512,7 +565,7 @@ class PreferencesWindowController(AppKit.NSObject):
         self._api_key_field = AppKit.NSTextField.alloc().initWithFrame_(
             Foundation.NSMakeRect(108, 162, 312, 24)
         )
-        self._api_key_field.setStringValue_(config.get("openai_api_key", ""))
+        self._api_key_field.setStringValue_(keychain_get_api_key() or "")
         self._api_key_field.setPlaceholderString_("sk-...")
         content.addSubview_(self._api_key_field)
 
@@ -679,6 +732,7 @@ class WhisperDictateApp:
         log.info(f"App initialized. Hold keycode {config['hotkey_keycode']} to record.")
 
         self._check_accessibility()
+        self._check_api_key()
 
         # Pre-warm the audio pipeline in the background so the first recording
         # on any input device (especially headsets) starts without a delay.
@@ -706,6 +760,30 @@ class WhisperDictateApp:
             self._perform_on_main(self._show_accessibility_alert)
         except Exception as e:
             log.warning(f"Could not check accessibility permission: {e}")
+
+    def _check_api_key(self):
+        if not keychain_get_api_key():
+            log.warning("No API key in Keychain — will prompt user")
+            self._perform_on_main(self._show_no_api_key_alert)
+
+    def _show_no_api_key_alert(self):
+        try:
+            alert = AppKit.NSAlert.alloc().init()
+            alert.setMessageText_("OpenAI API Key Required")
+            alert.setInformativeText_(
+                "No API key is configured. Whisper Dictate cannot transcribe "
+                "audio without it.\n\n"
+                "Click 'Open Preferences' to add your key."
+            )
+            alert.addButtonWithTitle_("Open Preferences")
+            alert.addButtonWithTitle_("Later")
+            alert.setAlertStyle_(AppKit.NSAlertStyleWarning)
+            AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+            response = alert.runModal()
+            if response == AppKit.NSAlertFirstButtonReturn:
+                self._show_preferences()
+        except Exception as e:
+            log.warning(f"No-API-key alert error: {e}")
 
     def _show_accessibility_alert(self):
         try:

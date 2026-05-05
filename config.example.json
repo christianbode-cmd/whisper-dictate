@@ -1,5 +1,4 @@
 {
-  "openai_api_key": "sk-YOUR-KEY-HERE",
   "hotkey_keycode": 58,
   "model": "gpt-4o-transcribe",
   "language": "en",

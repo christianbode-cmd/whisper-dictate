@@ -171,25 +171,50 @@ if [ -d "$APP_PATH" ]; then
     # Clear quarantine so macOS doesn't block it
     xattr -cr "$APP_PATH" 2>/dev/null || true
 
+    # ── Build DMG ──────────────────────────────────────────────────────────
+    DMG_NAME="Whisper Dictate"
+    DMG_PATH="$SCRIPT_DIR/dist/Whisper Dictate.dmg"
+    DMG_STAGING="$SCRIPT_DIR/dist/dmg_staging"
+
+    echo "Creating DMG installer..."
+
+    rm -rf "$DMG_STAGING"
+    mkdir -p "$DMG_STAGING"
+
+    # Copy app and add /Applications symlink for drag-to-install
+    cp -R "$APP_PATH" "$DMG_STAGING/"
+    ln -s /Applications "$DMG_STAGING/Applications"
+
+    # Remove any previous DMG
+    rm -f "$DMG_PATH"
+
+    hdiutil create \
+        -volname "$DMG_NAME" \
+        -srcfolder "$DMG_STAGING" \
+        -ov \
+        -format UDZO \
+        -imagekey zlib-level=9 \
+        "$DMG_PATH" > /dev/null
+
+    rm -rf "$DMG_STAGING"
+
     echo ""
     echo "==================================="
     echo "  Build complete!"
     echo "==================================="
     echo ""
     echo "  App: $APP_PATH"
+    echo "  DMG: $DMG_PATH"
     echo ""
-    echo "  NEXT STEPS:"
+    echo "  INSTALL (no terminal needed):"
+    echo "  1. Open dist/Whisper Dictate.dmg"
+    echo "  2. Drag 'Whisper Dictate' into the Applications folder"
+    echo "  3. Launch from Applications or Spotlight"
+    echo "  4. Grant Microphone + Accessibility when prompted"
+    echo "  5. Enter your OpenAI API key in Preferences"
     echo ""
-    echo "  1. Edit config.json with your OpenAI API key:"
-    echo "     nano \"$RESOURCES_DIR/config.json\""
-    echo ""
-    echo "  2. Move to Applications:"
-    echo "     cp -R \"$APP_PATH\" /Applications/"
-    echo ""
-    echo "  3. Launch:"
-    echo "     open \"/Applications/Whisper Dictate.app\""
-    echo ""
-    echo "  4. Grant Microphone + Accessibility when prompted."
+    echo "  NOTE: On first launch macOS may say the app cannot be opened."
+    echo "  Right-click the app → Open → Open to bypass this once."
     echo ""
     echo "  DEBUGGING:"
     echo "  tail -f ~/Library/Logs/WhisperDictate.log"

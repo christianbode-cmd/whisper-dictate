@@ -536,15 +536,13 @@ class PreferencesWindowController(AppKit.NSObject):
         self._window.close()
 
     def windowWillClose_(self, notification):
-        """Ensure capture monitor is removed if window is closed via the X button."""
+        """Restore accessory policy and clean up capture monitor on close."""
         self._cleanup_capture()
+        AppKit.NSApplication.sharedApplication().setActivationPolicy_(
+            AppKit.NSApplicationActivationPolicyAccessory
+        )
 
     def windowDidBecomeKey_(self, notification):
-        """Re-focus the API key field whenever the window regains focus.
-
-        Without this, switching away to copy a key and coming back leaves
-        the field without a cursor, making paste impossible.
-        """
         if not self._capturing and hasattr(self, "_api_key_field"):
             self._window.makeFirstResponder_(self._api_key_field)
 
@@ -640,8 +638,13 @@ class PreferencesWindowController(AppKit.NSObject):
         save_btn.setKeyEquivalent_("\r")  # Return
         content.addSubview_(save_btn)
 
-        # Bring window to front and focus the API key field so the user can
-        # type or paste immediately without having to click first.
+        # Switch to regular policy so this window can become a proper key
+        # window and accept keyboard input (paste, typing).  Accessory-policy
+        # apps cannot make their windows key, so text fields don't receive
+        # keyboard events.  We restore the accessory policy on close.
+        AppKit.NSApplication.sharedApplication().setActivationPolicy_(
+            AppKit.NSApplicationActivationPolicyRegular
+        )
         AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
         self._window.makeKeyAndOrderFront_(None)
         self._window.makeFirstResponder_(self._api_key_field)

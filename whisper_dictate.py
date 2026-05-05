@@ -85,7 +85,7 @@ log.info(f"Config path: {CONFIG_PATH}")
 
 DEFAULT_CONFIG = {
     "hotkey_keycode": 58,
-    "model": "gpt-4o-transcribe",
+    "model": "gpt-4o-mini-transcribe",
     "language": "en",
     "response_format": "text",
     "prompt": "",
@@ -542,6 +542,9 @@ class PreferencesWindowController(AppKit.NSObject):
         """Write config to disk, notify app, close window."""
         self._cleanup_capture()
         self._config["hotkey_keycode"] = self._pending_keycode
+        self._config["model"] = self._model_popup.titleOfSelectedItem()
+        lang = self._language_field.stringValue().strip()
+        self._config["language"] = lang if lang else "en"
         api_key = self._api_key_field.stringValue().strip()
         if api_key != self._display_key:
             keychain_save_api_key(api_key)
@@ -581,7 +584,7 @@ class PreferencesWindowController(AppKit.NSObject):
         # the user actually replaced the key or left it unchanged.
         self._display_key = _truncate_api_key(keychain_get_api_key())
 
-        WIN_W, WIN_H = 440, 220
+        WIN_W, WIN_H = 440, 300
         # NSWindowStyleMask: Titled=1, Closable=2, Miniaturizable=4
         WIN_STYLE = 1 | 2 | 4
 
@@ -598,9 +601,9 @@ class PreferencesWindowController(AppKit.NSObject):
         content = self._window.contentView()
 
         # "API Key:" label + text field
-        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 165, 80, 22), "API Key:"))
+        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 243, 80, 22), "API Key:"))
         self._api_key_field = AppKit.NSTextField.alloc().initWithFrame_(
-            Foundation.NSMakeRect(108, 162, 312, 24)
+            Foundation.NSMakeRect(108, 240, 312, 24)
         )
         self._api_key_field.setEditable_(True)
         self._api_key_field.setSelectable_(True)
@@ -610,12 +613,39 @@ class PreferencesWindowController(AppKit.NSObject):
         self._api_key_field.setPlaceholderString_("sk-...")
         content.addSubview_(self._api_key_field)
 
-        # "Hotkey:" label
-        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 110, 80, 22), "Hotkey:"))
+        # "Model:" label + popup button
+        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 203, 80, 22), "Model:"))
+        self._model_popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            Foundation.NSMakeRect(108, 199, 240, 26), False
+        )
+        for m in ["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"]:
+            self._model_popup.addItemWithTitle_(m)
+        current_model = config.get("model", "gpt-4o-mini-transcribe")
+        if not self._model_popup.selectItemWithTitle_(current_model):
+            self._model_popup.selectItemAtIndex_(0)
+        content.addSubview_(self._model_popup)
 
-        # Hotkey capture button — shows current key name; click to capture
+        # "Language:" label + text field + hint
+        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 163, 80, 22), "Language:"))
+        self._language_field = AppKit.NSTextField.alloc().initWithFrame_(
+            Foundation.NSMakeRect(108, 160, 60, 24)
+        )
+        self._language_field.setEditable_(True)
+        self._language_field.setSelectable_(True)
+        self._language_field.setBezeled_(True)
+        self._language_field.setDrawsBackground_(True)
+        self._language_field.setStringValue_(config.get("language", "en"))
+        self._language_field.setPlaceholderString_("en")
+        content.addSubview_(self._language_field)
+        content.addSubview_(self._make_label(
+            Foundation.NSMakeRect(176, 163, 220, 22),
+            "ISO code, e.g. en, de, fr, es", small=True,
+        ))
+
+        # "Hotkey:" label + capture button
+        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 122, 80, 22), "Hotkey:"))
         self._hotkey_btn = AppKit.NSButton.alloc().initWithFrame_(
-            Foundation.NSMakeRect(108, 105, 240, 30)
+            Foundation.NSMakeRect(108, 116, 240, 30)
         )
         self._hotkey_btn.setBezelStyle_(1)  # NSRoundedBezelStyle
         self._hotkey_btn.setTitle_(keycode_to_name(self._pending_keycode))
@@ -623,16 +653,16 @@ class PreferencesWindowController(AppKit.NSObject):
         self._hotkey_btn.setAction_(b"startCapture:")
         content.addSubview_(self._hotkey_btn)
 
-        # Hint / instruction text beneath button
+        # Hint / instruction text beneath hotkey button
         self._hint_label = self._make_label(
-            Foundation.NSMakeRect(108, 78, 316, 22),
+            Foundation.NSMakeRect(108, 90, 316, 22),
             "Click the button above, then press a key or modifier key.",
             small=True,
         )
         content.addSubview_(self._hint_label)
 
         # Horizontal separator
-        sep = AppKit.NSBox.alloc().initWithFrame_(Foundation.NSMakeRect(0, 60, WIN_W, 5))
+        sep = AppKit.NSBox.alloc().initWithFrame_(Foundation.NSMakeRect(0, 72, WIN_W, 5))
         sep.setBoxType_(2)  # NSBoxSeparator
         content.addSubview_(sep)
 

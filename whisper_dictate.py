@@ -756,6 +756,7 @@ class WhisperDictateApp:
             0.05, self._timer_helper, b"fire:", None, True
         )
 
+        self._setup_edit_menu()
         self._register_hotkey()
         log.info(f"App initialized. Hold keycode {config['hotkey_keycode']} to record.")
 
@@ -765,6 +766,33 @@ class WhisperDictateApp:
         # Pre-warm the audio pipeline in the background so the first recording
         # on any input device (especially headsets) starts without a delay.
         threading.Thread(target=self.recorder.prepare, daemon=True).start()
+
+    def _setup_edit_menu(self):
+        """Add a minimal Edit menu to the application main menu.
+
+        macOS routes Cmd+V / Cmd+C / Cmd+A through menu item key equivalents
+        before the responder chain.  Without an Edit menu these shortcuts do
+        nothing in text fields even when the field has focus.
+        """
+        main_menu = AppKit.NSMenu.alloc().init()
+
+        edit_item = AppKit.NSMenuItem.alloc().init()
+        edit_menu = AppKit.NSMenu.alloc().initWithTitle_("Edit")
+        for title, action, key in [
+            ("Cut",        "cut:",       "x"),
+            ("Copy",       "copy:",      "c"),
+            ("Paste",      "paste:",     "v"),
+            ("Select All", "selectAll:", "a"),
+        ]:
+            edit_menu.addItem_(
+                AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    title, action, key
+                )
+            )
+        edit_item.setSubmenu_(edit_menu)
+        main_menu.addItem_(edit_item)
+
+        self.app.setMainMenu_(main_menu)
 
     def _check_accessibility(self):
         """Check permission and, if missing, queue an alert for after app.run().

@@ -539,6 +539,15 @@ class PreferencesWindowController(AppKit.NSObject):
         """Ensure capture monitor is removed if window is closed via the X button."""
         self._cleanup_capture()
 
+    def windowDidBecomeKey_(self, notification):
+        """Re-focus the API key field whenever the window regains focus.
+
+        Without this, switching away to copy a key and coming back leaves
+        the field without a cursor, making paste impossible.
+        """
+        if not self._capturing and hasattr(self, "_api_key_field"):
+            self._window.makeFirstResponder_(self._api_key_field)
+
     # ------------------------------------------------------------------
     # Python helpers
     # ------------------------------------------------------------------

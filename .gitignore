@@ -1,0 +1,24 @@
+# API key and personal settings — never commit this
+config.json
+
+# Build outputs
+dist/
+dist_old_*/
+build/
+setup_py2app.py
+WhisperDictate.icns
+WhisperDictate.iconset/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# Editor / tooling
+.claude/
+*.docx

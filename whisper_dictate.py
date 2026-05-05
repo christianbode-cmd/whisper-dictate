@@ -617,9 +617,11 @@ class PreferencesWindowController(AppKit.NSObject):
         save_btn.setKeyEquivalent_("\r")  # Return
         content.addSubview_(save_btn)
 
-        # Bring window to front (works even for accessory-policy apps)
+        # Bring window to front and focus the API key field so the user can
+        # type or paste immediately without having to click first.
         AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
         self._window.makeKeyAndOrderFront_(None)
+        self._window.makeFirstResponder_(self._api_key_field)
         log.info("Preferences window opened")
 
     def _finish_capture(self, keycode):

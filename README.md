@@ -25,11 +25,7 @@ cd whisper-dictate
 
 ### 2. Add your OpenAI API key
 
-```bash
-cp config.example.json config.json
-```
-
-Open `config.json` and replace `sk-YOUR-KEY-HERE` with your real key. You can also set the key later via the app's Preferences menu (menubar icon → Preferences… → API Key field).
+Your API key is stored securely in the macOS Keychain — never in a file on disk. After launching the app for the first time, you will be prompted to enter it. You can also set or update it at any time via the app's Preferences menu (menubar icon → Preferences… → API Key field).
 
 ### 3. Build the app
 
@@ -91,9 +87,10 @@ Changes take effect immediately after clicking Save.
 
 `config.json` is excluded from version control (see `.gitignore`). Use `config.example.json` as a template.
 
+The API key is stored in the macOS Keychain (not in `config.json`) and can be managed via Preferences.
+
 | Setting | Default | Description |
 |---|---|---|
-| `openai_api_key` | — | Your OpenAI key (required) |
 | `model` | `gpt-4o-transcribe` | Transcription model |
 | `hotkey_keycode` | `58` | Trigger key (58 = Left Option ⌥) |
 | `language` | `en` | Language hint passed to the API |

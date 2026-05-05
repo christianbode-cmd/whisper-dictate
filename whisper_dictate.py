@@ -685,6 +685,12 @@ class WhisperDictateApp:
         threading.Thread(target=self.recorder.prepare, daemon=True).start()
 
     def _check_accessibility(self):
+        """Check permission and, if missing, queue an alert for after app.run().
+
+        NSAlert.runModal() must NOT be called from __init__ — doing so creates a
+        nested run loop before app.run() has started, which corrupts PyObjC's FFI
+        closure pointers and causes a PAC crash on the next ObjC→Python callback.
+        """
         try:
             import ctypes
             axlib = ctypes.CDLL(
@@ -696,21 +702,26 @@ class WhisperDictateApp:
                 return
 
             log.warning("Accessibility permission NOT granted -- paste will not work.")
+            # Defer the alert so it fires after app.run() has initialised the loop.
+            self._perform_on_main(self._show_accessibility_alert)
+        except Exception as e:
+            log.warning(f"Could not check accessibility permission: {e}")
 
+    def _show_accessibility_alert(self):
+        try:
             alert = AppKit.NSAlert.alloc().init()
             alert.setMessageText_("Accessibility Permission Required")
             alert.setInformativeText_(
-                "Whisper Dictate needs Accessibility access to paste transcribed text "
-                "into other apps.\n\n"
-                "Click 'Open Settings' to go to Privacy & Security > Accessibility, "
-                "then add Whisper Dictate. Restart the app afterward."
+                "Whisper Dictate needs Accessibility access to paste transcribed "
+                "text into other apps.\n\n"
+                "Click 'Open Settings' to go to Privacy & Security > Accessibility,"
+                " then add Whisper Dictate. Restart the app afterward."
             )
             alert.addButtonWithTitle_("Open Settings")
             alert.addButtonWithTitle_("Later")
             alert.setAlertStyle_(AppKit.NSAlertStyleWarning)
             AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
             response = alert.runModal()
-
             if response == AppKit.NSAlertFirstButtonReturn:
                 import subprocess
                 subprocess.Popen([
@@ -719,7 +730,7 @@ class WhisperDictateApp:
                     "?Privacy_Accessibility",
                 ])
         except Exception as e:
-            log.warning(f"Could not check accessibility permission: {e}")
+            log.warning(f"Accessibility alert error: {e}")
 
     def set_icon(self, state):
         button = self.status_item.button()

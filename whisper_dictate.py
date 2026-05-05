@@ -137,6 +137,12 @@ def keychain_save_api_key(key):
         log.error(f"Keychain write error: {e}")
         return False
 
+def _truncate_api_key(key):
+    """Return a display-safe version of the key: first 7 chars + ... + last 4."""
+    if not key or len(key) < 12:
+        return key or ""
+    return f"{key[:7]}...{key[-4:]}"
+
 def load_config():
     if not os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "w") as f:
@@ -517,7 +523,8 @@ class PreferencesWindowController(AppKit.NSObject):
         self._cleanup_capture()
         self._config["hotkey_keycode"] = self._pending_keycode
         api_key = self._api_key_field.stringValue().strip()
-        keychain_save_api_key(api_key)
+        if api_key != self._display_key:
+            keychain_save_api_key(api_key)
         save_config(self._config)
         if self._on_save:
             self._on_save(self._config)
@@ -543,6 +550,9 @@ class PreferencesWindowController(AppKit.NSObject):
         self._pending_keycode = config.get("hotkey_keycode", 58)
         self._capturing = False
         self._capture_monitor = None
+        # Truncated placeholder shown in the field — used to detect whether
+        # the user actually replaced the key or left it unchanged.
+        self._display_key = _truncate_api_key(keychain_get_api_key())
 
         WIN_W, WIN_H = 440, 220
         # NSWindowStyleMask: Titled=1, Closable=2, Miniaturizable=4
@@ -565,7 +575,7 @@ class PreferencesWindowController(AppKit.NSObject):
         self._api_key_field = AppKit.NSTextField.alloc().initWithFrame_(
             Foundation.NSMakeRect(108, 162, 312, 24)
         )
-        self._api_key_field.setStringValue_(keychain_get_api_key() or "")
+        self._api_key_field.setStringValue_(self._display_key)
         self._api_key_field.setPlaceholderString_("sk-...")
         content.addSubview_(self._api_key_field)
 

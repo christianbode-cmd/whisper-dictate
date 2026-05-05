@@ -561,6 +561,7 @@ class PreferencesWindowController(AppKit.NSObject):
     def windowWillClose_(self, notification):
         """Restore accessory policy and clean up capture monitor on close."""
         self._cleanup_capture()
+        self._window = None  # clear before AppKit auto-releases the window
         AppKit.NSApplication.sharedApplication().setActivationPolicy_(
             AppKit.NSApplicationActivationPolicyAccessory
         )

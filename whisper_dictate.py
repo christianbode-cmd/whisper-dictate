@@ -584,6 +584,10 @@ class PreferencesWindowController(AppKit.NSObject):
         self._api_key_field = AppKit.NSTextField.alloc().initWithFrame_(
             Foundation.NSMakeRect(108, 162, 312, 24)
         )
+        self._api_key_field.setEditable_(True)
+        self._api_key_field.setSelectable_(True)
+        self._api_key_field.setBezeled_(True)
+        self._api_key_field.setDrawsBackground_(True)
         self._api_key_field.setStringValue_(self._display_key)
         self._api_key_field.setPlaceholderString_("sk-...")
         content.addSubview_(self._api_key_field)

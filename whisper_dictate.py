@@ -99,6 +99,10 @@ DEFAULT_CONFIG = {
 _KC_SERVICE = "WhisperDictate"
 _KC_ACCOUNT = "OpenAIAPIKey"
 
+# Cached OpenAI client — recreated only when the API key changes.
+_openai_client: "OpenAI | None" = None
+_openai_client_key: "str | None" = None
+
 def keychain_get_api_key():
     """Return the stored API key, or None if not set."""
     try:
@@ -114,8 +118,23 @@ def keychain_get_api_key():
         log.warning(f"Keychain read error: {e}")
     return None
 
+def _get_openai_client():
+    """Return a cached OpenAI client, recreating it only when the key changes."""
+    global _openai_client, _openai_client_key
+    api_key = keychain_get_api_key()
+    if not api_key:
+        return None
+    if api_key != _openai_client_key:
+        _openai_client = OpenAI(api_key=api_key)
+        _openai_client_key = api_key
+        log.info("OpenAI client initialised")
+    return _openai_client
+
 def keychain_save_api_key(key):
     """Store (or delete) the API key in the macOS Keychain."""
+    global _openai_client, _openai_client_key
+    _openai_client = None   # invalidate cached client
+    _openai_client_key = None
     try:
         subprocess.run(
             ["security", "delete-generic-password",
@@ -350,21 +369,24 @@ class ClipboardPaster:
             AppKit.CGEventPost(AppKit.kCGHIDEventTap, cmd_up)
             log.info("Simulated Cmd+V via AppKit")
 
-        # Wait long enough for the target app to process the Cmd+V.
-        # Apps like Slack and Electron-based editors can be slow to handle paste.
-        time.sleep(1.0)
-
-        pb.clearContents()
-        if old_string:
-            pb.setString_forType_(old_string, AppKit.NSPasteboardTypeString)
+        # Restore clipboard in a background thread so the caller is unblocked
+        # immediately after Cmd+V fires.  The 1s delay gives slow apps (Slack,
+        # Electron editors) time to read the pasteboard before we overwrite it.
+        def _restore():
+            time.sleep(1.0)
+            pb.clearContents()
+            if old_string:
+                pb.setString_forType_(old_string, AppKit.NSPasteboardTypeString)
             log.debug("Clipboard restored")
+
+        threading.Thread(target=_restore, daemon=True).start()
 
 # ---------------------------------------------------------------------------
 # Transcription
 # ---------------------------------------------------------------------------
 def transcribe(filepath, config):
-    api_key = keychain_get_api_key()
-    if not api_key:
+    client = _get_openai_client()
+    if not client:
         log.error("No API key in Keychain — open Preferences to add one")
         return None
 
@@ -377,8 +399,6 @@ def transcribe(filepath, config):
 
     if file_size < 1000:
         log.warning(f"Recording file very small ({file_size} bytes) — may be empty/silent")
-
-    client = OpenAI(api_key=api_key)
 
     kwargs = {
         "model": config["model"],
@@ -1014,10 +1034,6 @@ class WhisperDictateApp:
                 self.recorder.cleanup()
 
                 if text:
-                    # Run paste here in the background thread — NSPasteboard and
-                    # CGEventPost are both thread-safe, and keeping the 1-second
-                    # clipboard-restore sleep off the main thread prevents the
-                    # NSRunLoop from freezing (which was delaying hotkey events).
                     ClipboardPaster.paste(text)
                     log.info(f"Success: pasted {len(text)} chars")
                 else:
@@ -1025,10 +1041,9 @@ class WhisperDictateApp:
             except Exception as e:
                 log.error(f"Error in process thread: {e}", exc_info=True)
             finally:
+                # Reset UI as soon as Cmd+V has fired — the clipboard restore
+                # runs in its own background thread so we don't block here.
                 self._perform_on_main(self._reset_ui)
-                # Re-warm the recorder so the next hotkey press is instant.
-                # Runs after cleanup() so the temp file is gone before prepare()
-                # creates the new one.
                 threading.Thread(target=self.recorder.prepare, daemon=True).start()
 
         thread = threading.Thread(target=process, daemon=True)

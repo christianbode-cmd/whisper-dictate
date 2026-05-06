@@ -482,6 +482,8 @@ class PreferencesWindowController(AppKit.NSObject):
     on_save(new_config) is called so the app can re-register the hotkey.
     """
 
+    _window = None  # set by show_with_config; cleared by windowWillClose_
+
     # ------------------------------------------------------------------
     # ObjC action methods (called by NSButton)
     # ------------------------------------------------------------------
@@ -759,7 +761,7 @@ class WhisperDictateApp:
         self.processing = False
         self.monitor = None
         self.local_monitor = None
-        self._prefs_controller = None
+        self._prefs_controller = PreferencesWindowController.alloc().init()
 
         self.app = AppKit.NSApplication.sharedApplication()
         self.app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
@@ -928,15 +930,12 @@ class WhisperDictateApp:
 
     def _show_preferences(self):
         """Open (or bring to front) the Preferences window."""
-        if (self._prefs_controller is not None
-                and hasattr(self._prefs_controller, "_window")
-                and self._prefs_controller._window is not None
+        if (self._prefs_controller._window is not None
                 and self._prefs_controller._window.isVisible()):
             AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
             self._prefs_controller._window.makeKeyAndOrderFront_(None)
             return
 
-        self._prefs_controller = PreferencesWindowController.alloc().init()
         self._prefs_controller.show_with_config(
             dict(self.config),          # pass a copy so cancel leaves config intact
             self._on_preferences_saved,

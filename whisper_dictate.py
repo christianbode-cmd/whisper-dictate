@@ -404,6 +404,7 @@ def transcribe_realtime(filepath, config):
         return None
 
     try:
+        import audioop
         import base64
         import wave
         from websockets.sync.client import connect
@@ -412,20 +413,30 @@ def transcribe_realtime(filepath, config):
         log.error(f"Realtime transcription needs the 'websockets' package: {e}")
         return None
 
+    # The Realtime API requires PCM audio at >= 24 kHz, but AudioRecorder
+    # captures 16 kHz.  Read the actual rate and resample to 24 kHz.
+    TARGET_RATE = 24000
     try:
         with wave.open(filepath, "rb") as wf:
+            in_rate = wf.getframerate()
+            sampwidth = wf.getsampwidth()
+            nchannels = wf.getnchannels()
             pcm = wf.readframes(wf.getnframes())
+        if in_rate != TARGET_RATE:
+            pcm, _ = audioop.ratecv(
+                pcm, sampwidth, nchannels, in_rate, TARGET_RATE, None
+            )
     except Exception as e:
         log.error(f"Could not read WAV for realtime transcription: {e}")
         return None
 
     audio_b64 = base64.b64encode(pcm).decode("ascii")
     model = config["model"]
+    # GA Realtime API: no "OpenAI-Beta" header (the old beta event shape is
+    # rejected with "beta_api_shape_disabled"), and the session is configured
+    # with a "session.update" event using the nested audio.input shape.
     url = "wss://api.openai.com/v1/realtime?intent=transcription"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "OpenAI-Beta": "realtime=v1",
-    }
+    headers = {"Authorization": f"Bearer {api_key}"}
 
     transcription = {"model": model}
     if config.get("language"):
@@ -436,11 +447,16 @@ def transcribe_realtime(filepath, config):
             url, additional_headers=headers, max_size=None, open_timeout=10
         ) as ws:
             ws.send(json.dumps({
-                "type": "transcription_session.update",
+                "type": "session.update",
                 "session": {
-                    "input_audio_format": "pcm16",
-                    "input_audio_transcription": transcription,
-                    "turn_detection": None,
+                    "type": "transcription",
+                    "audio": {
+                        "input": {
+                            # Recording is 16 kHz mono PCM16 (see AudioRecorder).
+                            "format": {"type": "audio/pcm", "rate": TARGET_RATE},
+                            "transcription": transcription,
+                        },
+                    },
                 },
             }))
             ws.send(json.dumps({
@@ -709,6 +725,12 @@ class PreferencesWindowController(AppKit.NSObject):
             False,
         )
         self._window.setTitle_("Whisper Dictate — Preferences")
+        # Do NOT let AppKit release the window when it closes.  PyObjC already
+        # owns a reference (self._window); if AppKit also releases it the
+        # window is over-released, which segfaults in the close animation
+        # (-[_NSWindowTransformAnimation dealloc] → objc_release).  We clear
+        # self._window in windowWillClose_, so PyObjC handles the lifetime.
+        self._window.setReleasedWhenClosed_(False)
         self._window.setDelegate_(self)
         self._window.center()
 

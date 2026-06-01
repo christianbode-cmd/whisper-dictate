@@ -6,6 +6,22 @@ A lightweight macOS menubar app that records your voice, sends it to OpenAI's tr
 
 ---
 
+## Installation
+
+The easiest way to install on macOS is via the DMG:
+
+1. Download `Whisper.Dictate.dmg` from the [latest release](https://github.com/christianbode-cmd/whisper-dictate/releases/latest)
+2. Open the DMG and drag **Whisper Dictate.app** into your **Applications** folder
+3. Launch the app from Applications or Spotlight
+4. If macOS says the app is damaged or unverified, run:
+   ```bash
+   xattr -cr "/Applications/Whisper Dictate.app"
+   ```
+5. On first launch, grant **Microphone** and **Accessibility** access when prompted — both are required
+6. Click the 🎙 menubar icon → **Preferences…** and enter your [OpenAI API key](https://platform.openai.com/api-keys)
+
+---
+
 ## Requirements
 
 - macOS 13 (Ventura) or later

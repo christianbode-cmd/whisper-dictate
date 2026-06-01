@@ -32,6 +32,7 @@ pip install --quiet \
     pyobjc-framework-AVFoundation \
     pyobjc-framework-Quartz \
     openai \
+    websockets \
     py2app
 
 # ── Create app icon ──────────────────────────────────────────────────────
@@ -131,7 +132,7 @@ OPTIONS = {
         'NSMicrophoneUsageDescription': 'Whisper Dictate needs microphone access to record your voice for transcription.',
         'NSAppleEventsUsageDescription': 'Whisper Dictate needs accessibility access to paste transcribed text into your applications.',
     },
-    'packages': ['openai', 'httpx', 'httpcore', 'certifi', 'idna', 'sniffio', 'anyio', 'h11', 'pydantic', 'pydantic_core', 'annotated_types', 'distro', 'jiter', 'typing_extensions'],
+    'packages': ['openai', 'httpx', 'httpcore', 'certifi', 'idna', 'sniffio', 'anyio', 'h11', 'pydantic', 'pydantic_core', 'annotated_types', 'distro', 'jiter', 'typing_extensions', 'websockets'],
     'frameworks': [],
 }
 

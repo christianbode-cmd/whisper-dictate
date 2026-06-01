@@ -384,7 +384,104 @@ class ClipboardPaster:
 # ---------------------------------------------------------------------------
 # Transcription
 # ---------------------------------------------------------------------------
+# Models served by the Realtime API (WebSocket streaming) rather than the
+# standard audio.transcriptions HTTP endpoint.
+REALTIME_MODELS = {"gpt-realtime-whisper"}
+
+
+def transcribe_realtime(filepath, config):
+    """Transcribe a recorded WAV via the OpenAI Realtime API over WebSocket.
+
+    gpt-realtime-whisper is a streaming speech-to-text model that is not
+    available on the audio.transcriptions endpoint.  We reuse the existing
+    record-then-send flow: the finished recording's PCM data is streamed to a
+    transcription session in one shot, committed, and the completed transcript
+    is read back.
+    """
+    api_key = keychain_get_api_key()
+    if not api_key:
+        log.error("No API key in Keychain — open Preferences to add one")
+        return None
+
+    try:
+        import base64
+        import wave
+        from websockets.sync.client import connect
+        from websockets.exceptions import ConnectionClosed
+    except ImportError as e:
+        log.error(f"Realtime transcription needs the 'websockets' package: {e}")
+        return None
+
+    try:
+        with wave.open(filepath, "rb") as wf:
+            pcm = wf.readframes(wf.getnframes())
+    except Exception as e:
+        log.error(f"Could not read WAV for realtime transcription: {e}")
+        return None
+
+    audio_b64 = base64.b64encode(pcm).decode("ascii")
+    model = config["model"]
+    url = "wss://api.openai.com/v1/realtime?intent=transcription"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "OpenAI-Beta": "realtime=v1",
+    }
+
+    transcription = {"model": model}
+    if config.get("language"):
+        transcription["language"] = config["language"]
+
+    try:
+        with connect(
+            url, additional_headers=headers, max_size=None, open_timeout=10
+        ) as ws:
+            ws.send(json.dumps({
+                "type": "transcription_session.update",
+                "session": {
+                    "input_audio_format": "pcm16",
+                    "input_audio_transcription": transcription,
+                    "turn_detection": None,
+                },
+            }))
+            ws.send(json.dumps({
+                "type": "input_audio_buffer.append",
+                "audio": audio_b64,
+            }))
+            ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+
+            parts = []
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                try:
+                    raw = ws.recv(timeout=max(0.0, deadline - time.time()))
+                except TimeoutError:
+                    log.warning("Realtime transcription timed out")
+                    break
+                except ConnectionClosed:
+                    break
+
+                event = json.loads(raw)
+                etype = event.get("type", "")
+                if etype == "conversation.item.input_audio_transcription.completed":
+                    parts.append(event.get("transcript", ""))
+                    break
+                if etype == "error":
+                    log.error(f"Realtime API error: {event.get('error')}")
+                    break
+
+        text = "".join(parts).strip()
+        log.info(f"Realtime result: '{text[:100]}{'...' if len(text) > 100 else ''}'")
+        return text if text else None
+
+    except Exception as e:
+        log.error(f"Realtime API error: {type(e).__name__}: {e}", exc_info=True)
+        return None
+
+
 def transcribe(filepath, config):
+    if config.get("model") in REALTIME_MODELS:
+        return transcribe_realtime(filepath, config)
+
     client = _get_openai_client()
     if not client:
         log.error("No API key in Keychain — open Preferences to add one")
@@ -455,6 +552,20 @@ _BAR_CHARS = "▁▂▃▄▅▆▇█"
 # ---------------------------------------------------------------------------
 # Menu action helper — thin ObjC target for the Preferences menu item
 # ---------------------------------------------------------------------------
+class AppDelegate(AppKit.NSObject):
+    """Application delegate.
+
+    Whisper Dictate runs as a menubar (accessory) app, but the Preferences
+    window temporarily switches the app to a Regular activation policy so its
+    text fields can receive keyboard input.  Without this delegate, closing
+    that window counts as "last window closed" and AppKit terminates the
+    process — so the app would quit every time Preferences was closed.
+    """
+
+    def applicationShouldTerminateAfterLastWindowClosed_(self, sender):
+        return False
+
+
 class MenuActionHelper(AppKit.NSObject):
     """Bridges NSMenuItem actions to plain Python callbacks."""
 
@@ -765,6 +876,11 @@ class WhisperDictateApp:
 
         self.app = AppKit.NSApplication.sharedApplication()
         self.app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+
+        # Keep a strong reference — NSApplication.delegate is a weak reference,
+        # so without this the delegate would be deallocated immediately.
+        self._app_delegate = AppDelegate.alloc().init()
+        self.app.setDelegate_(self._app_delegate)
 
         self.status_item = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(
             AppKit.NSVariableStatusItemLength

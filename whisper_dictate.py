@@ -85,7 +85,7 @@ log.info(f"Config path: {CONFIG_PATH}")
 
 DEFAULT_CONFIG = {
     "hotkey_keycode": 58,
-    "model": "gpt-realtime-whisper",
+    "model": "gpt-4o-mini-transcribe",
     "language": "en",
     "response_format": "text",
     "prompt": "",
@@ -623,7 +623,7 @@ class PreferencesWindowController(AppKit.NSObject):
         )
         for m in ["gpt-realtime-whisper", "gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"]:
             self._model_popup.addItemWithTitle_(m)
-        current_model = config.get("model", "gpt-realtime-whisper")
+        current_model = config.get("model", "gpt-4o-mini-transcribe")
         if not self._model_popup.selectItemWithTitle_(current_model):
             self._model_popup.selectItemAtIndex_(0)
         content.addSubview_(self._model_popup)

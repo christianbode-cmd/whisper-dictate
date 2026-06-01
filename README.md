@@ -107,7 +107,7 @@ The API key is stored in the macOS Keychain (not in `config.json`) and can be ma
 
 | Setting | Default | Description |
 |---|---|---|
-| `model` | `gpt-realtime-whisper` | Transcription model |
+| `model` | `gpt-4o-mini-transcribe` | Transcription model |
 | `hotkey_keycode` | `58` | Trigger key (58 = Left Option ⌥) |
 | `language` | `en` | Language hint passed to the API |
 | `sound_on_start` | `true` | Play a sound when recording starts |

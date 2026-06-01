@@ -757,8 +757,13 @@ class PreferencesWindowController(AppKit.NSObject):
         for m in ["gpt-realtime-whisper", "gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"]:
             self._model_popup.addItemWithTitle_(m)
         current_model = config.get("model", "gpt-4o-mini-transcribe")
-        if not self._model_popup.selectItemWithTitle_(current_model):
-            self._model_popup.selectItemAtIndex_(0)
+        # NOTE: selectItemWithTitle_ returns void (None), not a success flag,
+        # so we must look up the index ourselves.  indexOfItemWithTitle_
+        # returns -1 when the model isn't in the list.
+        model_index = self._model_popup.indexOfItemWithTitle_(current_model)
+        if model_index < 0:
+            model_index = 0
+        self._model_popup.selectItemAtIndex_(model_index)
         content.addSubview_(self._model_popup)
 
         # "Language:" label + text field + hint

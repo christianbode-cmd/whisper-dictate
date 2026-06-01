@@ -384,120 +384,7 @@ class ClipboardPaster:
 # ---------------------------------------------------------------------------
 # Transcription
 # ---------------------------------------------------------------------------
-# Models served by the Realtime API (WebSocket streaming) rather than the
-# standard audio.transcriptions HTTP endpoint.
-REALTIME_MODELS = {"gpt-realtime-whisper"}
-
-
-def transcribe_realtime(filepath, config):
-    """Transcribe a recorded WAV via the OpenAI Realtime API over WebSocket.
-
-    gpt-realtime-whisper is a streaming speech-to-text model that is not
-    available on the audio.transcriptions endpoint.  We reuse the existing
-    record-then-send flow: the finished recording's PCM data is streamed to a
-    transcription session in one shot, committed, and the completed transcript
-    is read back.
-    """
-    api_key = keychain_get_api_key()
-    if not api_key:
-        log.error("No API key in Keychain — open Preferences to add one")
-        return None
-
-    try:
-        import audioop
-        import base64
-        import wave
-        from websockets.sync.client import connect
-        from websockets.exceptions import ConnectionClosed
-    except ImportError as e:
-        log.error(f"Realtime transcription needs the 'websockets' package: {e}")
-        return None
-
-    # The Realtime API requires PCM audio at >= 24 kHz, but AudioRecorder
-    # captures 16 kHz.  Read the actual rate and resample to 24 kHz.
-    TARGET_RATE = 24000
-    try:
-        with wave.open(filepath, "rb") as wf:
-            in_rate = wf.getframerate()
-            sampwidth = wf.getsampwidth()
-            nchannels = wf.getnchannels()
-            pcm = wf.readframes(wf.getnframes())
-        if in_rate != TARGET_RATE:
-            pcm, _ = audioop.ratecv(
-                pcm, sampwidth, nchannels, in_rate, TARGET_RATE, None
-            )
-    except Exception as e:
-        log.error(f"Could not read WAV for realtime transcription: {e}")
-        return None
-
-    audio_b64 = base64.b64encode(pcm).decode("ascii")
-    model = config["model"]
-    # GA Realtime API: no "OpenAI-Beta" header (the old beta event shape is
-    # rejected with "beta_api_shape_disabled"), and the session is configured
-    # with a "session.update" event using the nested audio.input shape.
-    url = "wss://api.openai.com/v1/realtime?intent=transcription"
-    headers = {"Authorization": f"Bearer {api_key}"}
-
-    transcription = {"model": model}
-    if config.get("language"):
-        transcription["language"] = config["language"]
-
-    try:
-        with connect(
-            url, additional_headers=headers, max_size=None, open_timeout=10
-        ) as ws:
-            ws.send(json.dumps({
-                "type": "session.update",
-                "session": {
-                    "type": "transcription",
-                    "audio": {
-                        "input": {
-                            # Recording is 16 kHz mono PCM16 (see AudioRecorder).
-                            "format": {"type": "audio/pcm", "rate": TARGET_RATE},
-                            "transcription": transcription,
-                        },
-                    },
-                },
-            }))
-            ws.send(json.dumps({
-                "type": "input_audio_buffer.append",
-                "audio": audio_b64,
-            }))
-            ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
-
-            parts = []
-            deadline = time.time() + 30
-            while time.time() < deadline:
-                try:
-                    raw = ws.recv(timeout=max(0.0, deadline - time.time()))
-                except TimeoutError:
-                    log.warning("Realtime transcription timed out")
-                    break
-                except ConnectionClosed:
-                    break
-
-                event = json.loads(raw)
-                etype = event.get("type", "")
-                if etype == "conversation.item.input_audio_transcription.completed":
-                    parts.append(event.get("transcript", ""))
-                    break
-                if etype == "error":
-                    log.error(f"Realtime API error: {event.get('error')}")
-                    break
-
-        text = "".join(parts).strip()
-        log.info(f"Realtime result: '{text[:100]}{'...' if len(text) > 100 else ''}'")
-        return text if text else None
-
-    except Exception as e:
-        log.error(f"Realtime API error: {type(e).__name__}: {e}", exc_info=True)
-        return None
-
-
 def transcribe(filepath, config):
-    if config.get("model") in REALTIME_MODELS:
-        return transcribe_realtime(filepath, config)
-
     client = _get_openai_client()
     if not client:
         log.error("No API key in Keychain — open Preferences to add one")
@@ -754,7 +641,7 @@ class PreferencesWindowController(AppKit.NSObject):
         self._model_popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
             Foundation.NSMakeRect(108, 199, 240, 26), False
         )
-        for m in ["gpt-realtime-whisper", "gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"]:
+        for m in ["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"]:
             self._model_popup.addItemWithTitle_(m)
         current_model = config.get("model", "gpt-4o-mini-transcribe")
         # NOTE: selectItemWithTitle_ returns void (None), not a success flag,

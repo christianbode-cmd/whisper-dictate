@@ -143,6 +143,12 @@ setup(
 )
 SETUP_SCRIPT
 
+# config.json is gitignored; seed it from the example on a fresh checkout.
+if [ ! -f "$SCRIPT_DIR/config.json" ]; then
+    cp "$SCRIPT_DIR/config.example.json" "$SCRIPT_DIR/config.json"
+    echo "Created config.json from config.example.json"
+fi
+
 # ── Build ─────────────────────────────────────────────────────────────────
 echo ""
 echo "Building Whisper Dictate.app..."

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Whisper Dictate — hold-to-record voice transcription for macOS.
+Blab — hold-to-record voice transcription for macOS.
 
 Hold a hotkey, speak, release → transcribed text is pasted into the focused field.
 Uses OpenAI's transcription API and native macOS APIs throughout.
@@ -18,12 +18,12 @@ import threading
 import time
 
 # ---------------------------------------------------------------------------
-# Logging — writes to ~/Library/Logs/WhisperDictate.log
+# Logging — writes to ~/Library/Logs/Blab.log
 # Visible even when running as a .app bundle with no terminal
 # ---------------------------------------------------------------------------
 LOG_DIR = os.path.expanduser("~/Library/Logs")
 os.makedirs(LOG_DIR, exist_ok=True)
-LOG_PATH = os.path.join(LOG_DIR, "WhisperDictate.log")
+LOG_PATH = os.path.join(LOG_DIR, "Blab.log")
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -33,7 +33,7 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout),
     ],
 )
-log = logging.getLogger("WhisperDictate")
+log = logging.getLogger("Blab")
 log.info(f"Log file: {LOG_PATH}")
 
 # ---------------------------------------------------------------------------
@@ -75,7 +75,7 @@ def find_config_path():
     if os.path.exists(p2):
         return os.path.abspath(p2)
 
-    p3 = os.path.expanduser("~/whisper-dictate/config.json")
+    p3 = os.path.expanduser("~/blab/config.json")
     if os.path.exists(p3):
         return p3
 
@@ -98,26 +98,39 @@ DEFAULT_CONFIG = {
 # ---------------------------------------------------------------------------
 # Keychain — API key storage
 # ---------------------------------------------------------------------------
-_KC_SERVICE = "WhisperDictate"
+_KC_SERVICE = "Blab"
+_KC_LEGACY_SERVICE = "WhisperDictate"   # pre-1.2.0 item, migrated on first read
 _KC_ACCOUNT = "OpenAIAPIKey"
 
 # Cached OpenAI client — invalidated by keychain_save_api_key().
 _openai_client: "OpenAI | None" = None
 
-def keychain_get_api_key():
-    """Return the stored API key, or None if not set."""
+def _keychain_read(service):
     try:
         result = subprocess.run(
             ["security", "find-generic-password",
-             "-s", _KC_SERVICE, "-a", _KC_ACCOUNT, "-w"],
+             "-s", service, "-a", _KC_ACCOUNT, "-w"],
             capture_output=True, text=True,
         )
         if result.returncode == 0:
-            key = result.stdout.strip()
-            return key or None
+            return result.stdout.strip() or None
     except Exception as e:
         log.warning(f"Keychain read error: {e}")
     return None
+
+def keychain_get_api_key():
+    """Return the stored API key, or None if not set."""
+    key = _keychain_read(_KC_SERVICE)
+    if key is None:
+        key = _keychain_read(_KC_LEGACY_SERVICE)
+        if key and keychain_save_api_key(key):
+            subprocess.run(
+                ["security", "delete-generic-password",
+                 "-s", _KC_LEGACY_SERVICE, "-a", _KC_ACCOUNT],
+                capture_output=True,
+            )
+            log.info(f"Migrated API key from the {_KC_LEGACY_SERVICE} Keychain item")
+    return key
 
 def _get_openai_client():
     """Return a cached OpenAI client, or None if no API key is stored."""
@@ -300,7 +313,7 @@ class AudioRecorder:
 
     def __init__(self, input_device=DEFAULT_INPUT_DEVICE):
         self.input_device = input_device
-        self.filepath = os.path.join(tempfile.gettempdir(), "whisper_dictate_recording.wav")
+        self.filepath = os.path.join(tempfile.gettempdir(), "blab_recording.wav")
         self._session = None
         self._output = None
         self._device_uid = None
@@ -564,7 +577,7 @@ _BAR_CHARS = "▁▂▃▄▅▆▇█"
 class AppDelegate(AppKit.NSObject):
     """Application delegate.
 
-    Whisper Dictate runs as a menubar (accessory) app, but the Preferences
+    Blab runs as a menubar (accessory) app, but the Preferences
     window temporarily switches the app to a Regular activation policy so its
     text fields can receive keyboard input.  Without this delegate, closing
     that window counts as "last window closed" and AppKit terminates the
@@ -591,6 +604,35 @@ class MenuActionHelper(AppKit.NSObject):
 
 
 # ---------------------------------------------------------------------------
+# Visual style — pale paper, near-black ink, tracked monospace eyebrows
+# ---------------------------------------------------------------------------
+def _rgb(r, g, b, a=1.0):
+    return AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(r / 255, g / 255, b / 255, a)
+
+PAPER = _rgb(254, 243, 160)
+INK = _rgb(18, 18, 18)
+INK_SOFT = _rgb(18, 18, 18, 0.55)
+CREAM_SOFT = _rgb(250, 247, 236, 0.65)
+
+def _mono(size):
+    return AppKit.NSFont.monospacedSystemFontOfSize_weight_(size, AppKit.NSFontWeightMedium)
+
+def _tracked(text, font, color, kern=1.5):
+    attrs = {
+        AppKit.NSFontAttributeName: font,
+        AppKit.NSForegroundColorAttributeName: color,
+        AppKit.NSKernAttributeName: kern,
+    }
+    return Foundation.NSAttributedString.alloc().initWithString_attributes_(text, attrs)
+
+def app_version():
+    bundle = Foundation.NSBundle.mainBundle()
+    if bundle.bundleIdentifier() != "io.github.christianbode-cmd.blab":
+        return "dev"   # running from source: mainBundle is the Python framework
+    return str(bundle.objectForInfoDictionaryKey_("CFBundleShortVersionString"))
+
+
+# ---------------------------------------------------------------------------
 # Preferences window — hotkey capture UI
 # ---------------------------------------------------------------------------
 class PreferencesWindowController(AppKit.NSObject):
@@ -613,11 +655,9 @@ class PreferencesWindowController(AppKit.NSObject):
         if self._capturing:
             return
         self._capturing = True
-        self._hotkey_btn.setTitle_("Press a key…")
+        self._set_pill_title(self._hotkey_btn, "Press a key…", INK_SOFT)
         self._hotkey_btn.setEnabled_(False)
-        self._hint_label.setStringValue_(
-            "Press the key or modifier you want to use. Press Esc to cancel."
-        )
+        self._hint_label.setStringValue_("Press the key or modifier to use. Esc cancels.")
 
         mask = AppKit.NSEventMaskKeyDown | AppKit.NSEventMaskFlagsChanged
         ctrl = self  # closure reference
@@ -708,17 +748,31 @@ class PreferencesWindowController(AppKit.NSObject):
         # the user actually replaced the key or left it unchanged.
         self._display_key = _truncate_api_key(keychain_get_api_key())
 
-        WIN_W, WIN_H = 440, 340
-        # NSWindowStyleMask: Titled=1, Closable=2, Miniaturizable=4
-        WIN_STYLE = 1 | 2 | 4
+        WIN_W, WIN_H = 480, 488
+        M = 28                                  # outer margin
+        COL = (WIN_W - 2 * M - 16) // 2         # two-column width
+        style = (AppKit.NSWindowStyleMaskTitled
+                 | AppKit.NSWindowStyleMaskClosable
+                 | AppKit.NSWindowStyleMaskMiniaturizable
+                 | AppKit.NSWindowStyleMaskFullSizeContentView)
+
+        def R(x, top, w, h):
+            """Rect from top-left coordinates (AppKit's origin is bottom-left)."""
+            return Foundation.NSMakeRect(x, WIN_H - top - h, w, h)
 
         self._window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             Foundation.NSMakeRect(0, 0, WIN_W, WIN_H),
-            WIN_STYLE,
+            style,
             AppKit.NSBackingStoreBuffered,
             False,
         )
-        self._window.setTitle_("Whisper Dictate — Preferences")
+        self._window.setTitle_("Blab — Preferences")
+        self._window.setTitlebarAppearsTransparent_(True)
+        self._window.setTitleVisibility_(AppKit.NSWindowTitleHidden)
+        self._window.setBackgroundColor_(PAPER)
+        self._window.setMovableByWindowBackground_(True)
+        # Fixed light palette regardless of system dark mode
+        self._window.setAppearance_(AppKit.NSAppearance.appearanceNamed_(AppKit.NSAppearanceNameAqua))
         # Do NOT let AppKit release the window when it closes.  PyObjC already
         # owns a reference (self._window); if AppKit also releases it the
         # window is over-released, which segfaults in the close animation
@@ -730,24 +784,29 @@ class PreferencesWindowController(AppKit.NSObject):
 
         content = self._window.contentView()
 
-        # "API Key:" label + text field
-        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 283, 80, 22), "API Key:"))
-        self._api_key_field = AppKit.NSTextField.alloc().initWithFrame_(
-            Foundation.NSMakeRect(108, 280, 312, 24)
-        )
-        self._api_key_field.setEditable_(True)
-        self._api_key_field.setSelectable_(True)
-        self._api_key_field.setBezeled_(True)
-        self._api_key_field.setDrawsBackground_(True)
-        self._api_key_field.setStringValue_(self._display_key)
-        self._api_key_field.setPlaceholderString_("sk-...")
+        # Header
+        content.addSubview_(self._eyebrow(R(M, 30, 240, 14), "Preferences"))
+        content.addSubview_(self._label(
+            R(M, 48, 360, 40), "Blab.",
+            AppKit.NSFont.systemFontOfSize_weight_(30, AppKit.NSFontWeightHeavy), INK,
+        ))
+        version = self._eyebrow(R(WIN_W - M - 140, 56, 140, 14), f"v{app_version()}", upper=False)
+        version.setAlignment_(AppKit.NSTextAlignmentRight)
+        content.addSubview_(version)
+        content.addSubview_(self._label(
+            R(M, 92, WIN_W - 2 * M, 18),
+            "Hold a key, speak, release — your words land where the cursor is.",
+            AppKit.NSFont.systemFontOfSize_(12.5), INK_SOFT,
+        ))
+
+        # API key
+        content.addSubview_(self._eyebrow(R(M, 134, COL, 14), "API key"))
+        self._api_key_field = self._field(R(M, 152, WIN_W - 2 * M, 28), self._display_key, "sk-...")
         content.addSubview_(self._api_key_field)
 
-        # "Model:" label + popup button
-        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 243, 80, 22), "Model:"))
-        self._model_popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            Foundation.NSMakeRect(108, 239, 240, 26), False
-        )
+        # Model (left column)
+        content.addSubview_(self._eyebrow(R(M, 204, COL, 14), "Model"))
+        self._model_popup = self._popup(R(M, 222, COL, 28))
         for m in ["gpt-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"]:
             self._model_popup.addItemWithTitle_(m)
         current_model = config.get("model", "gpt-transcribe")
@@ -760,13 +819,11 @@ class PreferencesWindowController(AppKit.NSObject):
         self._model_popup.selectItemAtIndex_(model_index)
         content.addSubview_(self._model_popup)
 
-        # "Microphone:" label + popup button.  Items are added via the menu
-        # directly because NSPopUpButton.addItemWithTitle_ de-duplicates
-        # titles, which would misalign two identically-named devices.
-        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 203, 80, 22), "Microphone:"))
-        self._mic_popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            Foundation.NSMakeRect(108, 199, 240, 26), False
-        )
+        # Microphone (right column).  Items are added via the menu directly
+        # because NSPopUpButton.addItemWithTitle_ de-duplicates titles, which
+        # would misalign two identically-named devices.
+        content.addSubview_(self._eyebrow(R(M + COL + 16, 204, COL, 14), "Microphone"))
+        self._mic_popup = self._popup(R(M + COL + 16, 222, COL, 28))
         self._mic_uids = [DEFAULT_INPUT_DEVICE]
         titles = ["System default"]
         for uid, name in list_input_devices():
@@ -782,68 +839,43 @@ class PreferencesWindowController(AppKit.NSObject):
         self._mic_popup.selectItemAtIndex_(self._mic_uids.index(current_mic))
         content.addSubview_(self._mic_popup)
 
-        # "Language:" label + text field + hint
-        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 163, 80, 22), "Language:"))
-        self._language_field = AppKit.NSTextField.alloc().initWithFrame_(
-            Foundation.NSMakeRect(108, 160, 60, 24)
-        )
-        self._language_field.setEditable_(True)
-        self._language_field.setSelectable_(True)
-        self._language_field.setBezeled_(True)
-        self._language_field.setDrawsBackground_(True)
-        self._language_field.setStringValue_(config.get("language", "en"))
-        self._language_field.setPlaceholderString_("en")
+        # Language (left column)
+        content.addSubview_(self._eyebrow(R(M, 274, COL, 14), "Language"))
+        self._language_field = self._field(R(M, 290, 120, 28), config.get("language", "en"), "en")
         content.addSubview_(self._language_field)
-        content.addSubview_(self._make_label(
-            Foundation.NSMakeRect(176, 163, 220, 22),
-            "ISO code, e.g. en, de, fr, es", small=True,
+        content.addSubview_(self._label(
+            R(M, 328, COL, 16), "ISO code · en, de, fr, es", AppKit.NSFont.systemFontOfSize_(11), INK_SOFT,
         ))
 
-        # "Hotkey:" label + capture button
-        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 122, 80, 22), "Hotkey:"))
-        self._hotkey_btn = AppKit.NSButton.alloc().initWithFrame_(
-            Foundation.NSMakeRect(108, 116, 240, 30)
+        # Hotkey (right column): outlined pill that captures the next key press
+        content.addSubview_(self._eyebrow(R(M + COL + 16, 274, COL, 14), "Hotkey"))
+        self._hotkey_btn = self._pill(
+            R(M + COL + 16, 290, COL, 32), keycode_to_name(self._pending_keycode),
+            b"startCapture:", border=INK,
         )
-        self._hotkey_btn.setBezelStyle_(1)  # NSRoundedBezelStyle
-        self._hotkey_btn.setTitle_(keycode_to_name(self._pending_keycode))
-        self._hotkey_btn.setTarget_(self)
-        self._hotkey_btn.setAction_(b"startCapture:")
         content.addSubview_(self._hotkey_btn)
-
-        # Hint / instruction text beneath hotkey button
-        self._hint_label = self._make_label(
-            Foundation.NSMakeRect(108, 90, 316, 22),
-            "Click the button above, then press a key or modifier key.",
-            small=True,
+        self._hint_label = self._label(
+            R(M + COL + 16, 328, COL, 32), "Click, then press a key or modifier.",
+            AppKit.NSFont.systemFontOfSize_(11), INK_SOFT, wrap=True,
         )
         content.addSubview_(self._hint_label)
 
-        # Horizontal separator
-        sep = AppKit.NSBox.alloc().initWithFrame_(Foundation.NSMakeRect(0, 72, WIN_W, 5))
-        sep.setBoxType_(2)  # NSBoxSeparator
-        content.addSubview_(sep)
+        # Footer: ink bar with Cancel and the paper-coloured Save pill
+        footer = AppKit.NSView.alloc().initWithFrame_(R(M, 388, WIN_W - 2 * M, 72))
+        footer.setWantsLayer_(True)
+        footer.layer().setBackgroundColor_(INK.CGColor())
+        footer.layer().setCornerRadius_(20)
+        content.addSubview_(footer)
 
-        # Cancel button  (Esc key equivalent)
-        cancel_btn = AppKit.NSButton.alloc().initWithFrame_(
-            Foundation.NSMakeRect(240, 15, 90, 30)
-        )
-        cancel_btn.setBezelStyle_(1)
-        cancel_btn.setTitle_("Cancel")
-        cancel_btn.setTarget_(self)
-        cancel_btn.setAction_(b"cancelPrefs:")
-        cancel_btn.setKeyEquivalent_("\x1b")  # Escape
-        content.addSubview_(cancel_btn)
-
-        # Save button  (Return key equivalent — default button)
-        save_btn = AppKit.NSButton.alloc().initWithFrame_(
-            Foundation.NSMakeRect(345, 15, 80, 30)
-        )
-        save_btn.setBezelStyle_(1)
-        save_btn.setTitle_("Save")
-        save_btn.setTarget_(self)
-        save_btn.setAction_(b"savePrefs:")
-        save_btn.setKeyEquivalent_("\r")  # Return
-        content.addSubview_(save_btn)
+        footer.addSubview_(self._pill(
+            Foundation.NSMakeRect(22, 20, 120, 32), "ESC · CANCEL", b"cancelPrefs:",
+            text_color=CREAM_SOFT, mono=True, key="\x1b",
+        ))
+        footer_w = footer.frame().size.width
+        footer.addSubview_(self._pill(
+            Foundation.NSMakeRect(footer_w - 22 - 124, 18, 124, 36), "Save  →", b"savePrefs:",
+            fill=PAPER, text_color=INK, key="\r",
+        ))
 
         # Switch to regular policy so this window can become a proper key
         # window and accept keyboard input (paste, typing).  Accessory-policy
@@ -863,11 +895,9 @@ class PreferencesWindowController(AppKit.NSObject):
         if self._capture_monitor:
             AppKit.NSEvent.removeMonitor_(self._capture_monitor)
             self._capture_monitor = None
-        self._hotkey_btn.setTitle_(keycode_to_name(keycode))
+        self._set_pill_title(self._hotkey_btn, keycode_to_name(keycode), INK)
         self._hotkey_btn.setEnabled_(True)
-        self._hint_label.setStringValue_(
-            "Click the button above, then press a key or modifier key."
-        )
+        self._hint_label.setStringValue_("Click, then press a key or modifier.")
         log.debug(f"Hotkey captured: {keycode} ({keycode_to_name(keycode)})")
 
     def _cancel_capture(self):
@@ -875,11 +905,9 @@ class PreferencesWindowController(AppKit.NSObject):
         if self._capture_monitor:
             AppKit.NSEvent.removeMonitor_(self._capture_monitor)
             self._capture_monitor = None
-        self._hotkey_btn.setTitle_(keycode_to_name(self._pending_keycode))
+        self._set_pill_title(self._hotkey_btn, keycode_to_name(self._pending_keycode), INK)
         self._hotkey_btn.setEnabled_(True)
-        self._hint_label.setStringValue_(
-            "Click the button above, then press a key or modifier key."
-        )
+        self._hint_label.setStringValue_("Click, then press a key or modifier.")
 
     def _cleanup_capture(self):
         if self._capture_monitor:
@@ -887,26 +915,76 @@ class PreferencesWindowController(AppKit.NSObject):
             self._capture_monitor = None
         self._capturing = False
 
-    def _make_label(self, frame, text, small=False):
-        tf = AppKit.NSTextField.alloc().initWithFrame_(frame)
-        tf.setStringValue_(text)
-        tf.setBezeled_(False)
-        tf.setDrawsBackground_(False)
-        tf.setEditable_(False)
+    # ------------------------------------------------------------------
+    # View factories
+    # ------------------------------------------------------------------
+
+    @objc.python_method
+    def _label(self, frame, text, font, color, wrap=False):
+        tf = (AppKit.NSTextField.wrappingLabelWithString_(text) if wrap
+              else AppKit.NSTextField.labelWithString_(text))
+        tf.setFrame_(frame)
+        tf.setFont_(font)
+        tf.setTextColor_(color)
         tf.setSelectable_(False)
-        if small:
-            tf.setFont_(AppKit.NSFont.systemFontOfSize_(11))
-            try:
-                tf.setTextColor_(AppKit.NSColor.secondaryLabelColor())
-            except AttributeError:
-                tf.setTextColor_(AppKit.NSColor.grayColor())
         return tf
+
+    @objc.python_method
+    def _eyebrow(self, frame, text, upper=True):
+        """Small tracked monospace caption: ( LIKE THIS )"""
+        tf = AppKit.NSTextField.labelWithAttributedString_(
+            _tracked(f"( {text.upper() if upper else text} )", _mono(10.5), INK_SOFT)
+        )
+        tf.setFrame_(frame)
+        tf.setSelectable_(False)
+        return tf
+
+    @objc.python_method
+    def _field(self, frame, value, placeholder):
+        tf = AppKit.NSTextField.alloc().initWithFrame_(frame)
+        tf.setBezelStyle_(AppKit.NSTextFieldRoundedBezel)
+        tf.setFont_(AppKit.NSFont.systemFontOfSize_(13))
+        tf.setStringValue_(value)
+        tf.setPlaceholderString_(placeholder)
+        return tf
+
+    @objc.python_method
+    def _popup(self, frame):
+        popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(frame, False)
+        popup.setFont_(AppKit.NSFont.systemFontOfSize_(13))
+        return popup
+
+    @objc.python_method
+    def _pill(self, frame, title, action, fill=None, border=None, text_color=INK, mono=False, key=None):
+        btn = AppKit.NSButton.alloc().initWithFrame_(frame)
+        btn.setBordered_(False)
+        btn.setWantsLayer_(True)
+        btn.layer().setCornerRadius_(frame.size.height / 2)
+        if fill is not None:
+            btn.layer().setBackgroundColor_(fill.CGColor())
+        if border is not None:
+            btn.layer().setBorderWidth_(1.5)
+            btn.layer().setBorderColor_(border.CGColor())
+        btn.setTarget_(self)
+        btn.setAction_(action)
+        if key:
+            btn.setKeyEquivalent_(key)
+        self._set_pill_title(btn, title, text_color, mono)
+        return btn
+
+    @objc.python_method
+    def _set_pill_title(self, btn, title, color, mono=False):
+        if mono:
+            btn.setAttributedTitle_(_tracked(title, _mono(10.5), color))
+        else:
+            font = AppKit.NSFont.systemFontOfSize_weight_(13, AppKit.NSFontWeightSemibold)
+            btn.setAttributedTitle_(_tracked(title, font, color, kern=0.2))
 
 
 # ---------------------------------------------------------------------------
 # Status bar (menubar) app
 # ---------------------------------------------------------------------------
-class WhisperDictateApp:
+class BlabApp:
 
     def __init__(self, config):
         self.config = config
@@ -933,7 +1011,7 @@ class WhisperDictateApp:
         menu = AppKit.NSMenu.alloc().init()
 
         status_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Whisper Dictate — Ready", None, ""
+            "Blab — Ready", None, ""
         )
         status_item.setEnabled_(False)
         menu.addItem_(status_item)
@@ -1037,7 +1115,7 @@ class WhisperDictateApp:
             alert = AppKit.NSAlert.alloc().init()
             alert.setMessageText_("OpenAI API Key Required")
             alert.setInformativeText_(
-                "No API key is configured. Whisper Dictate cannot transcribe "
+                "No API key is configured. Blab cannot transcribe "
                 "audio without it.\n\n"
                 "Click 'Open Preferences' to add your key."
             )
@@ -1056,10 +1134,10 @@ class WhisperDictateApp:
             alert = AppKit.NSAlert.alloc().init()
             alert.setMessageText_("Accessibility Permission Required")
             alert.setInformativeText_(
-                "Whisper Dictate needs Accessibility access to paste transcribed "
+                "Blab needs Accessibility access to paste transcribed "
                 "text into other apps.\n\n"
                 "Click 'Open Settings' to go to Privacy & Security > Accessibility,"
-                " then add Whisper Dictate. Restart the app afterward."
+                " then add Blab. Restart the app afterward."
             )
             alert.addButtonWithTitle_("Open Settings")
             alert.addButtonWithTitle_("Later")
@@ -1076,14 +1154,34 @@ class WhisperDictateApp:
         except Exception as e:
             log.warning(f"Accessibility alert error: {e}")
 
-    def set_icon(self, state):
+    _ICON_SYMBOLS = {"idle": "mic.fill", "recording": "waveform", "processing": "hourglass"}
+    _ICON_EMOJI = {"idle": "🎙", "recording": "🔴", "processing": "⏳"}
+
+    def _symbol_image(self, state):
+        if not hasattr(self, "_icon_cache"):
+            self._icon_cache = {}
+        if state not in self._icon_cache:
+            image = None
+            if hasattr(AppKit.NSImage, "imageWithSystemSymbolName_accessibilityDescription_"):
+                image = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(
+                    self._ICON_SYMBOLS[state], None
+                )
+                if image is not None:
+                    image.setTemplate_(True)
+            self._icon_cache[state] = image
+        return self._icon_cache[state]
+
+    def set_icon(self, state, bars=""):
         button = self.status_item.button()
-        if state == "idle":
-            button.setTitle_("🎙")
-        elif state == "recording":
-            button.setTitle_("🔴")
-        elif state == "processing":
-            button.setTitle_("⏳")
+        image = self._symbol_image(state)
+        if image is None:  # macOS without SF Symbols
+            button.setImage_(None)
+            button.setTitle_(self._ICON_EMOJI[state] + bars)
+            return
+        button.setImage_(image)
+        button.setTitle_(bars)
+        button.setImagePosition_(AppKit.NSImageLeft if bars else AppKit.NSImageOnly)
+        button.setContentTintColor_(AppKit.NSColor.systemRedColor() if state == "recording" else None)
 
     def _show_preferences(self):
         """Open (or bring to front) the Preferences window."""
@@ -1186,7 +1284,7 @@ class WhisperDictateApp:
             log.error("Failed to start recording")
             self.recording = False
             self.set_icon("idle")
-            self.menu_status.setTitle_("Whisper Dictate — Mic Error")
+            self.menu_status.setTitle_("Blab — Mic Error")
             return
 
         # Play in a background thread after a delay so the BT A2DP→HFP profile
@@ -1249,7 +1347,7 @@ class WhisperDictateApp:
     def _reset_ui(self):
         self.processing = False
         self.set_icon("idle")
-        self.menu_status.setTitle_("Whisper Dictate — Ready")
+        self.menu_status.setTitle_("Blab — Ready")
 
     def _perform_on_main(self, fn):
         self._main_queue.put(fn)
@@ -1270,8 +1368,7 @@ class WhisperDictateApp:
         # This avoids a second NSTimer and ObjC class entirely.
         if self.recording:
             try:
-                level = self.recorder.get_level()
-                self.status_item.button().setTitle_(f"🔴{self._level_to_bars(level)}")
+                self.set_icon("recording", self._level_to_bars(self.recorder.get_level()))
             except Exception:
                 pass  # never let a meter glitch disrupt the run loop
 
@@ -1294,11 +1391,11 @@ class WhisperDictateApp:
 # ---------------------------------------------------------------------------
 def main():
     log.info("=" * 50)
-    log.info("Whisper Dictate starting")
+    log.info("Blab starting")
     log.info(f"Python: {sys.version}")
     log.info(f"Script: {os.path.abspath(__file__)}")
     config = load_config()
-    app = WhisperDictateApp(config)
+    app = BlabApp(config)
     app.run()
 
 if __name__ == "__main__":

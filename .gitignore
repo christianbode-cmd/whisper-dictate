@@ -6,8 +6,8 @@ dist/
 dist_old_*/
 build/
 setup_py2app.py
-WhisperDictate.icns
-WhisperDictate.iconset/
+Blab.icns
+Blab.iconset/
 
 # Python
 .venv/

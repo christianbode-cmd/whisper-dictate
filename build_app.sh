@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/.venv"
 
 echo "==================================="
-echo "  Whisper Dictate — Build"
+echo "  Blab — Build"
 echo "==================================="
 echo ""
 
@@ -36,7 +36,7 @@ pip install --quiet \
 
 # ── Create app icon ──────────────────────────────────────────────────────
 echo "Creating app icon..."
-ICONSET_DIR="$SCRIPT_DIR/WhisperDictate.iconset"
+ICONSET_DIR="$SCRIPT_DIR/Blab.iconset"
 mkdir -p "$ICONSET_DIR"
 
 python3 << 'ICON_SCRIPT'
@@ -44,48 +44,46 @@ import AppKit
 import os
 
 sizes = [16, 32, 64, 128, 256, 512, 1024]
-iconset_dir = os.environ.get("ICONSET_DIR", "WhisperDictate.iconset")
+iconset_dir = os.environ.get("ICONSET_DIR", "Blab.iconset")
 
 for size in sizes:
     img = AppKit.NSImage.alloc().initWithSize_((size, size))
     img.lockFocus()
 
-    bg = AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.18, 0.55, 0.82, 1.0)
-    bg.setFill()
-    circle = AppKit.NSBezierPath.bezierPathWithOvalInRect_(((size*0.05, size*0.05), (size*0.9, size*0.9)))
-    circle.fill()
+    paper = AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(254/255, 243/255, 160/255, 1.0)
+    ink = AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(18/255, 18/255, 18/255, 1.0)
 
-    white = AppKit.NSColor.whiteColor()
-    white.setFill()
-    mic_w = size * 0.22
-    mic_h = size * 0.35
-    mic_x = (size - mic_w) / 2
-    mic_y = size * 0.42
-    mic_rect = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-        ((mic_x, mic_y), (mic_w, mic_h)), mic_w/2, mic_w/2
-    )
-    mic_rect.fill()
+    # Paper squircle with the standard macOS icon inset
+    paper.setFill()
+    inset = size * 0.08
+    AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+        ((inset, inset), (size - 2*inset, size - 2*inset)), size*0.2, size*0.2
+    ).fill()
 
-    white.setStroke()
-    arc_path = AppKit.NSBezierPath.bezierPath()
-    arc_path.setLineWidth_(size * 0.04)
-    arc_w = size * 0.34
-    arc_path.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_clockwise_(
-        (size/2, mic_y + mic_h * 0.3), arc_w/2, 220, 320, True
-    )
-    arc_path.stroke()
+    # Ink speech bubble with a tail
+    ink.setFill()
+    AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+        ((size*0.20, size*0.36), (size*0.60, size*0.40)), size*0.12, size*0.12
+    ).fill()
+    tail = AppKit.NSBezierPath.bezierPath()
+    tail.moveToPoint_((size*0.30, size*0.40))
+    tail.lineToPoint_((size*0.46, size*0.40))
+    tail.lineToPoint_((size*0.27, size*0.21))
+    tail.closePath()
+    tail.fill()
 
-    stand = AppKit.NSBezierPath.bezierPath()
-    stand.setLineWidth_(size * 0.04)
-    stand.moveToPoint_((size/2, mic_y - size * 0.02))
-    stand.lineToPoint_((size/2, size * 0.22))
-    stand.stroke()
-
-    base = AppKit.NSBezierPath.bezierPath()
-    base.setLineWidth_(size * 0.04)
-    base.moveToPoint_((size * 0.35, size * 0.22))
-    base.lineToPoint_((size * 0.65, size * 0.22))
-    base.stroke()
+    # Paper waveform inside the bubble
+    paper.setFill()
+    bar_w, gap = size*0.05, size*0.045
+    heights = [0.08, 0.16, 0.24, 0.16, 0.08]
+    x = size*0.5 - (len(heights)*bar_w + (len(heights)-1)*gap) / 2
+    cy = size*0.56
+    for h in heights:
+        bh = size*h
+        AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            ((x, cy - bh/2), (bar_w, bh)), bar_w/2, bar_w/2
+        ).fill()
+        x += bar_w + gap
 
     img.unlockFocus()
 
@@ -105,8 +103,8 @@ print("Icon PNGs created.")
 ICON_SCRIPT
 
 if command -v iconutil &> /dev/null; then
-    iconutil -c icns "$ICONSET_DIR" -o "$SCRIPT_DIR/WhisperDictate.icns" 2>/dev/null || true
-    echo "Created WhisperDictate.icns"
+    iconutil -c icns "$ICONSET_DIR" -o "$SCRIPT_DIR/Blab.icns" 2>/dev/null || true
+    echo "Created Blab.icns"
 fi
 rm -rf "$ICONSET_DIR"
 
@@ -114,22 +112,22 @@ rm -rf "$ICONSET_DIR"
 cat > "$SCRIPT_DIR/setup_py2app.py" << 'SETUP_SCRIPT'
 from setuptools import setup
 
-APP = ['whisper_dictate.py']
+APP = ['blab.py']
 DATA_FILES = ['config.json']
 
 OPTIONS = {
     'argv_emulation': False,
-    'iconfile': 'WhisperDictate.icns',
+    'iconfile': 'Blab.icns',
     'plist': {
-        'CFBundleName': 'Whisper Dictate',
-        'CFBundleDisplayName': 'Whisper Dictate',
-        'CFBundleIdentifier': 'com.whisper-dictate.app',
-        'CFBundleVersion': '1.1.0',
-        'CFBundleShortVersionString': '1.1.0',
+        'CFBundleName': 'Blab',
+        'CFBundleDisplayName': 'Blab',
+        'CFBundleIdentifier': 'io.github.christianbode-cmd.blab',
+        'CFBundleVersion': '1.2.0',
+        'CFBundleShortVersionString': '1.2.0',
         'LSMinimumSystemVersion': '13.0',
         'LSUIElement': True,
-        'NSMicrophoneUsageDescription': 'Whisper Dictate needs microphone access to record your voice for transcription.',
-        'NSAppleEventsUsageDescription': 'Whisper Dictate needs accessibility access to paste transcribed text into your applications.',
+        'NSMicrophoneUsageDescription': 'Blab needs microphone access to record your voice for transcription.',
+        'NSAppleEventsUsageDescription': 'Blab needs accessibility access to paste transcribed text into your applications.',
     },
     'packages': ['openai', 'httpx', 'httpcore', 'certifi', 'idna', 'sniffio', 'anyio', 'h11', 'pydantic', 'pydantic_core', 'annotated_types', 'distro', 'jiter', 'typing_extensions'],
     'frameworks': [],
@@ -151,7 +149,7 @@ fi
 
 # ── Build ─────────────────────────────────────────────────────────────────
 echo ""
-echo "Building Whisper Dictate.app..."
+echo "Building Blab.app..."
 echo "(this may take a minute)"
 echo ""
 
@@ -168,7 +166,7 @@ fi
 
 python setup_py2app.py py2app --dist-dir "$SCRIPT_DIR/dist" 2>&1 | tail -5
 
-APP_PATH="$SCRIPT_DIR/dist/Whisper Dictate.app"
+APP_PATH="$SCRIPT_DIR/dist/Blab.app"
 RESOURCES_DIR="$APP_PATH/Contents/Resources"
 
 if [ -d "$APP_PATH" ]; then
@@ -178,10 +176,10 @@ if [ -d "$APP_PATH" ]; then
     xattr -cr "$APP_PATH" 2>/dev/null || true
 
     # ── Build DMG ──────────────────────────────────────────────────────────
-    DMG_NAME="Whisper Dictate"
-    DMG_PATH="$SCRIPT_DIR/dist/Whisper Dictate.dmg"
+    DMG_NAME="Blab"
+    DMG_PATH="$SCRIPT_DIR/dist/Blab.dmg"
     DMG_STAGING="$SCRIPT_DIR/dist/dmg_staging"
-    DMG_TMP="$SCRIPT_DIR/dist/WD_tmp.dmg"
+    DMG_TMP="$SCRIPT_DIR/dist/Blab_tmp.dmg"
 
     echo "Creating DMG installer..."
 
@@ -217,7 +215,7 @@ para.setAlignment_(AppKit.NSTextAlignmentCenter)
 
 # Main instruction
 Foundation.NSString.stringWithString_(
-    "Drag Whisper Dictate to Applications to install"
+    "Drag Blab to Applications to install"
 ).drawInRect_withAttributes_(((0, 108), (W, 24)), {
     AppKit.NSFontAttributeName: AppKit.NSFont.systemFontOfSize_(13),
     AppKit.NSForegroundColorAttributeName: AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.2, 0.2, 0.25, 1.0),
@@ -286,7 +284,7 @@ tell application "Finder"
         set arrangement of theViewOptions to not arranged
         set icon size of theViewOptions to 100
         set background picture of theViewOptions to (alias POSIX file "$MOUNT_POINT/.background/background.png")
-        set position of item "Whisper Dictate.app" to {160, 210}
+        set position of item "Blab.app" to {160, 210}
         set position of item "Applications" to {440, 210}
         close
         open
@@ -330,8 +328,8 @@ APPLESCRIPT
     echo "  DMG: $DMG_PATH"
     echo ""
     echo "  INSTALL (no terminal needed):"
-    echo "  1. Open dist/Whisper Dictate.dmg"
-    echo "  2. Drag 'Whisper Dictate' into the Applications folder"
+    echo "  1. Open dist/Blab.dmg"
+    echo "  2. Drag 'Blab' into the Applications folder"
     echo "  3. Launch from Applications or Spotlight"
     echo "  4. Grant Microphone + Accessibility when prompted"
     echo "  5. Enter your OpenAI API key in Preferences"
@@ -340,7 +338,7 @@ APPLESCRIPT
     echo "  Right-click the app → Open → Open to bypass this once."
     echo ""
     echo "  DEBUGGING:"
-    echo "  tail -f ~/Library/Logs/WhisperDictate.log"
+    echo "  tail -f ~/Library/Logs/Blab.log"
     echo ""
 else
     echo "Error: Build failed. Check output above."
@@ -350,4 +348,4 @@ fi
 # Cleanup
 rm -rf "$SCRIPT_DIR/build"
 rm -f "$SCRIPT_DIR/setup_py2app.py"
-rm -f "$SCRIPT_DIR/WhisperDictate.icns"
+rm -f "$SCRIPT_DIR/Blab.icns"

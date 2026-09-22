@@ -1,4 +1,4 @@
-# Whisper Dictate
+# Blab
 
 Hold a key, speak, release — your words appear wherever your cursor is.
 
@@ -10,15 +10,15 @@ A lightweight macOS menubar app that records your voice, sends it to OpenAI's tr
 
 The easiest way to install on macOS is via the DMG:
 
-1. Download `Whisper.Dictate.dmg` from the [latest release](https://github.com/christianbode-cmd/whisper-dictate/releases/latest)
-2. Open the DMG and drag **Whisper Dictate.app** into your **Applications** folder
+1. Download `Blab.dmg` from the [latest release](https://github.com/christianbode-cmd/whisper-dictate/releases/latest)
+2. Open the DMG and drag **Blab.app** into your **Applications** folder
 3. Launch the app from Applications or Spotlight
 4. If macOS says the app is damaged or unverified, run:
    ```bash
-   xattr -cr "/Applications/Whisper Dictate.app"
+   xattr -cr "/Applications/Blab.app"
    ```
 5. On first launch, grant **Microphone** and **Accessibility** access when prompted — both are required
-6. Click the 🎙 menubar icon → **Preferences…** and enter your [OpenAI API key](https://platform.openai.com/api-keys)
+6. Click the microphone icon in the menubar → **Preferences…** and enter your [OpenAI API key](https://platform.openai.com/api-keys)
 
 ---
 
@@ -50,18 +50,18 @@ chmod +x build_app.sh
 ./build_app.sh
 ```
 
-This takes 1–2 minutes. It installs dependencies into a local virtual environment and produces `dist/Whisper Dictate.app`.
+This takes 1–2 minutes. It installs dependencies into a local virtual environment and produces `dist/Blab.app`.
 
 ### 4. Install
 
 ```bash
-cp -R "dist/Whisper Dictate.app" /Applications/
+cp -R "dist/Blab.app" /Applications/
 ```
 
 ### 5. Launch and grant permissions
 
 ```bash
-open "/Applications/Whisper Dictate.app"
+open "/Applications/Blab.app"
 ```
 
 macOS will prompt for **Microphone** and **Accessibility** access. Both are required:
@@ -72,25 +72,25 @@ macOS will prompt for **Microphone** and **Accessibility** access. Both are requ
 If macOS says the app is damaged, run:
 
 ```bash
-xattr -cr "/Applications/Whisper Dictate.app"
+xattr -cr "/Applications/Blab.app"
 ```
 
 ---
 
 ## Usage
 
-1. Look for the 🎙 icon in your menubar
+1. Look for the microphone icon in your menubar
 2. Click into any text field (Slack, email, browser, Notes, etc.)
-3. **Hold the hotkey** (default: Left Option ⌥) — icon turns 🔴
+3. **Hold the hotkey** (default: Left Option ⌥) — the icon becomes a red waveform with a live level meter
 4. **Speak naturally**
-5. **Release the key** — icon turns ⏳ while transcribing
-6. Transcribed text is pasted into the focused field, icon returns to 🎙
+5. **Release the key** — an hourglass shows while transcribing
+6. Transcribed text is pasted into the focused field and the microphone icon returns
 
 ---
 
 ## Preferences
 
-Click the 🎙 menubar icon → **Preferences…** (or press **Cmd+,**) to change:
+Click the microphone icon in the menubar → **Preferences…** (or press **Cmd+,**) to change:
 
 - **API Key** — update your OpenAI key without editing files
 - **Microphone** — record from a specific input device instead of the system default. With AirPods or other Bluetooth headsets the first half-second of speech is lost while macOS switches Bluetooth profiles; selecting the built-in microphone avoids this
@@ -138,13 +138,13 @@ The API key is stored in the macOS Keychain (not in `config.json`) and can be ma
 
 ## Rebuilding after changes
 
-If you edit `whisper_dictate.py`:
+If you edit `blab.py`:
 
 ```bash
 ./build_app.sh
-osascript -e 'quit app "Whisper Dictate"'
-rm -rf "/Applications/Whisper Dictate.app" && cp -R "dist/Whisper Dictate.app" /Applications/
-open "/Applications/Whisper Dictate.app"
+osascript -e 'quit app "Blab"'
+rm -rf "/Applications/Blab.app" && cp -R "dist/Blab.app" /Applications/
+open "/Applications/Blab.app"
 ```
 
 Re-granting Accessibility permission is required each time the binary changes (macOS revokes it automatically).
@@ -160,14 +160,14 @@ See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 ## Debugging
 
 ```bash
-tail -f ~/Library/Logs/WhisperDictate.log
+tail -f ~/Library/Logs/Blab.log
 ```
 
 Or run directly in a terminal to see output in real time:
 
 ```bash
 source .venv/bin/activate
-python whisper_dictate.py
+python blab.py
 ```
 
 ---

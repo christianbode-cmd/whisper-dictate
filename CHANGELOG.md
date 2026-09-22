@@ -3,6 +3,14 @@
 All notable changes to Whisper Dictate are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-09-22
+
+### Changed
+- **Renamed to Blab.** "Whisper Dictate" borrowed OpenAI's model name (no longer even the default) and sat in a crowd of MacWhisper / Superwhisper / Whisper Flow. The script is now `blab.py`, the log is `~/Library/Logs/Blab.log`, and the bundle identifier is `io.github.christianbode-cmd.blab` — so macOS asks for Microphone and Accessibility permission again on first launch. The API key stored under the old Keychain item is migrated automatically.
+- **Preferences redesigned**: pale-paper window with a transparent title bar, tracked monospace captions over each field, Model/Microphone and Language/Hotkey side by side, and an ink footer bar with the Save pill. The version is shown in the header.
+- **Menubar icon** uses SF Symbols — microphone when idle, a red waveform with the live level meter while recording, an hourglass while transcribing — instead of emoji. Falls back to emoji on macOS versions without SF Symbols.
+- New app icon in the same paper-and-ink palette.
+
 ## [1.1.0] - 2026-09-22
 
 ### Added
@@ -51,6 +59,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ### Fixed
 - Preferences crash caused by `NSAlert.runModal` during app initialisation.
 
+[1.2.0]: https://github.com/christianbode-cmd/whisper-dictate/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/christianbode-cmd/whisper-dictate/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/christianbode-cmd/whisper-dictate/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/christianbode-cmd/whisper-dictate/releases/tag/v1.0.0

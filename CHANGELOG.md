@@ -21,6 +21,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Preferences closing no longer quits the app.
 - Race when pressing the hotkey again before the recorder had re-armed after the previous recording.
 - Removed a broken `AppKit` fallback path for simulating Cmd+V; `pyobjc-framework-Quartz` is now a declared dependency (it was already required in practice).
+- Build script: works on a fresh checkout without `config.json`, and falls back to an unstyled DMG when `hdiutil convert` fails on recent macOS.
 
 ### Removed
 - Experimental `gpt-realtime-whisper` / Realtime API transcription path.

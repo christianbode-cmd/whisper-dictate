@@ -308,9 +308,16 @@ APPLESCRIPT
         sleep 1
     done
 
-    # Convert to compressed read-only DMG
-    hdiutil convert "$DMG_TMP" -format UDZO -imagekey zlib-level=9 \
-        -o "$DMG_PATH" > /dev/null
+    # Convert to compressed read-only DMG.  On recent macOS hdiutil convert
+    # can fail with "Resource temporarily unavailable"; fall back to building
+    # a plain (unstyled) DMG straight from the staging folder.
+    if ! hdiutil convert "$DMG_TMP" -format UDZO -imagekey zlib-level=9 \
+            -o "$DMG_PATH" > /dev/null 2>&1; then
+        echo "hdiutil convert failed — building an unstyled DMG instead"
+        rm -f "$DMG_PATH"
+        hdiutil create -volname "$DMG_NAME" -srcfolder "$DMG_STAGING" -ov \
+            -format UDZO -imagekey zlib-level=9 "$DMG_PATH" > /dev/null
+    fi
     rm -f "$DMG_TMP"
     rm -rf "$DMG_STAGING"
 

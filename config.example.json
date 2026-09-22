@@ -1,6 +1,7 @@
 {
   "hotkey_keycode": 58,
-  "model": "gpt-4o-transcribe",
+  "model": "gpt-transcribe",
+  "input_device": "default",
   "language": "en",
   "response_format": "text",
   "prompt": "",

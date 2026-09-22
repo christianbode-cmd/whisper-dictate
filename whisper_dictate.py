@@ -39,7 +39,7 @@ log.info(f"Log file: {LOG_PATH}")
 # ---------------------------------------------------------------------------
 # Dependency check
 # ---------------------------------------------------------------------------
-REQUIRED = ["objc", "AppKit", "Foundation", "AVFoundation", "openai"]
+REQUIRED = ["objc", "AppKit", "Foundation", "AVFoundation", "Quartz", "openai"]
 
 def check_dependencies():
     missing = []
@@ -50,7 +50,7 @@ def check_dependencies():
             missing.append(mod)
     if missing:
         log.error(f"Missing dependencies: {', '.join(missing)}")
-        log.error("Run: pip install pyobjc-framework-Cocoa pyobjc-framework-AVFoundation openai")
+        log.error("Run: pip install pyobjc-framework-Cocoa pyobjc-framework-AVFoundation pyobjc-framework-Quartz openai")
         sys.exit(1)
 
 check_dependencies()
@@ -59,6 +59,7 @@ import objc
 import AppKit
 import Foundation
 import AVFoundation
+import Quartz
 from openai import OpenAI
 
 # ---------------------------------------------------------------------------
@@ -85,7 +86,8 @@ log.info(f"Config path: {CONFIG_PATH}")
 
 DEFAULT_CONFIG = {
     "hotkey_keycode": 58,
-    "model": "gpt-4o-mini-transcribe",
+    "model": "gpt-transcribe",
+    "input_device": "default",
     "language": "en",
     "response_format": "text",
     "prompt": "",
@@ -99,9 +101,8 @@ DEFAULT_CONFIG = {
 _KC_SERVICE = "WhisperDictate"
 _KC_ACCOUNT = "OpenAIAPIKey"
 
-# Cached OpenAI client — recreated only when the API key changes.
+# Cached OpenAI client — invalidated by keychain_save_api_key().
 _openai_client: "OpenAI | None" = None
-_openai_client_key: "str | None" = None
 
 def keychain_get_api_key():
     """Return the stored API key, or None if not set."""
@@ -119,22 +120,22 @@ def keychain_get_api_key():
     return None
 
 def _get_openai_client():
-    """Return a cached OpenAI client, recreating it only when the key changes."""
-    global _openai_client, _openai_client_key
-    api_key = keychain_get_api_key()
-    if not api_key:
-        return None
-    if api_key != _openai_client_key:
-        _openai_client = OpenAI(api_key=api_key)
-        _openai_client_key = api_key
+    """Return a cached OpenAI client, or None if no API key is stored."""
+    global _openai_client
+    if _openai_client is None:
+        api_key = keychain_get_api_key()
+        if not api_key:
+            return None
+        # Short timeout: a hung request would otherwise lock the hotkey for
+        # the SDK default of 10 minutes.
+        _openai_client = OpenAI(api_key=api_key, timeout=30.0, max_retries=1)
         log.info("OpenAI client initialised")
     return _openai_client
 
 def keychain_save_api_key(key):
     """Store (or delete) the API key in the macOS Keychain."""
-    global _openai_client, _openai_client_key
+    global _openai_client
     _openai_client = None   # invalidate cached client
-    _openai_client_key = None
     try:
         subprocess.run(
             ["security", "delete-generic-password",
@@ -182,7 +183,7 @@ def load_config():
             log.info("Migrated API key from config.json to Keychain")
         save_config(merged)
 
-    log.info(f"Config loaded. Model: {merged['model']}, Language: {merged['language']}, Keycode: {merged['hotkey_keycode']}")
+    log.info(f"Config loaded. Model: {merged['model']}, Mic: {merged['input_device']}, Language: {merged['language']}, Keycode: {merged['hotkey_keycode']}")
     return merged
 
 
@@ -232,101 +233,218 @@ def keycode_to_name(keycode):
     return KEYCODE_NAMES.get(keycode, f"Key {keycode}")
 
 # ---------------------------------------------------------------------------
-# Audio recorder using AVFoundation
+# Audio input devices
 # ---------------------------------------------------------------------------
-class AudioRecorder:
-    def __init__(self):
-        self.recorder = None
-        self.filepath = None
-        self._start_time = None
-        self._prepared = False
+DEFAULT_INPUT_DEVICE = "default"   # follow the system default input
 
-    # Recording settings shared between prepare() and start()
+def list_input_devices():
+    """Return [(unique_id, name), ...] for every connected microphone."""
+    if hasattr(AVFoundation, "AVCaptureDeviceTypeMicrophone"):
+        types = [AVFoundation.AVCaptureDeviceTypeMicrophone]
+    else:  # macOS < 14
+        types = [AVFoundation.AVCaptureDeviceTypeBuiltInMicrophone,
+                 AVFoundation.AVCaptureDeviceTypeExternalUnknown]
+    discovery = AVFoundation.AVCaptureDeviceDiscoverySession.discoverySessionWithDeviceTypes_mediaType_position_(
+        types, AVFoundation.AVMediaTypeAudio, AVFoundation.AVCaptureDevicePositionUnspecified
+    )
+    return [(str(d.uniqueID()), str(d.localizedName())) for d in discovery.devices()]
+
+
+def resolve_input_device(unique_id):
+    """Return the AVCaptureDevice for unique_id, falling back to the system default."""
+    if unique_id and unique_id != DEFAULT_INPUT_DEVICE:
+        device = AVFoundation.AVCaptureDevice.deviceWithUniqueID_(unique_id)
+        if device is not None and device.isConnected():
+            return device
+        log.warning(f"Configured microphone {unique_id!r} not connected — using system default")
+    return AVFoundation.AVCaptureDevice.defaultDeviceWithMediaType_(AVFoundation.AVMediaTypeAudio)
+
+
+# ---------------------------------------------------------------------------
+# Audio recorder using AVCaptureSession
+#
+# AVAudioRecorder always records from the system default input and cannot be
+# pointed at a specific device.  With Bluetooth headsets (AirPods) that means
+# every recording waits ~0.5-1 s for the A2DP->HFP profile switch, losing the
+# start of the speech.  AVCaptureSession lets the user pin e.g. the built-in
+# microphone instead.
+# ---------------------------------------------------------------------------
+class _RecordingDelegate(AppKit.NSObject, protocols=[objc.protocolNamed("AVCaptureFileOutputRecordingDelegate")]):
+    """Signals when AVCaptureAudioFileOutput has finished writing the file."""
+
+    def init(self):
+        self = objc.super(_RecordingDelegate, self).init()
+        if self is None:
+            return None
+        self.finished = threading.Event()
+        self.error = None
+        return self
+
+    def captureOutput_didFinishRecordingToOutputFileAtURL_fromConnections_error_(
+        self, output, url, connections, error
+    ):
+        self.error = error
+        self.finished.set()
+
+
+class AudioRecorder:
+    # 16 kHz mono 16-bit PCM — small files, all the bandwidth speech needs.
     _SETTINGS = {
         AVFoundation.AVFormatIDKey: int(AVFoundation.kAudioFormatLinearPCM),
         AVFoundation.AVSampleRateKey: 16000.0,
         AVFoundation.AVNumberOfChannelsKey: 1,
         AVFoundation.AVLinearPCMBitDepthKey: 16,
         AVFoundation.AVLinearPCMIsFloatKey: False,
+        AVFoundation.AVLinearPCMIsBigEndianKey: False,
     }
 
-    def prepare(self):
-        """Pre-warm the audio hardware so start() can call record() instantly.
-
-        Call this once at startup (in a background thread) and again after
-        each recording completes.  Doing so activates the audio pipeline for
-        the currently-selected input device — including USB and Bluetooth
-        headsets — so the first milliseconds of speech are never clipped.
-        """
-        self._prepared = False
+    def __init__(self, input_device=DEFAULT_INPUT_DEVICE):
+        self.input_device = input_device
         self.filepath = os.path.join(tempfile.gettempdir(), "whisper_dictate_recording.wav")
+        self._session = None
+        self._output = None
+        self._device_uid = None
+        self._delegate = None
+        self._start_time = None
+        self._prepared = False
+        self._recording = False
 
-        if os.path.exists(self.filepath):
-            try:
-                os.remove(self.filepath)
-            except OSError:
-                pass
+    # All methods except wait_until_finalized() must run on the main thread.
+    # AVCaptureSession.stopRunning() blocks on the main queue internally, so
+    # calling it from a background thread while the main thread is busy
+    # deadlocks.  Session setup is cheap (~15 ms), so main is fine.
 
-        url = Foundation.NSURL.fileURLWithPath_(self.filepath)
+    def prepare(self):
+        """Tear down the previous session and build a fresh one for the
+        configured device, so start() only has to start it.
+        """
+        if self._recording:
+            log.warning("prepare() called while recording — ignored")
+            return False
+        self._prepared = False
+        self._teardown()
+        self.cleanup()
 
-        self.recorder, error = AVFoundation.AVAudioRecorder.alloc().initWithURL_settings_error_(
-            url, self._SETTINGS, None
-        )
-
-        if error or not self.recorder:
-            log.error(f"prepare(): Failed to init recorder: {error}")
+        device = resolve_input_device(self.input_device)
+        if device is None:
+            log.error("prepare(): no audio input device available")
             return False
 
-        if not self.recorder.prepareToRecord():
-            log.error("prepare(): prepareToRecord() returned False")
+        session = AVFoundation.AVCaptureSession.alloc().init()
+        session.beginConfiguration()
+        device_input, error = AVFoundation.AVCaptureDeviceInput.deviceInputWithDevice_error_(device, None)
+        if error or device_input is None or not session.canAddInput_(device_input):
+            log.error(f"prepare(): cannot use input '{device.localizedName()}': {error}")
             return False
+        session.addInput_(device_input)
 
+        output = AVFoundation.AVCaptureAudioFileOutput.alloc().init()
+        if not session.canAddOutput_(output):
+            log.error("prepare(): cannot add audio file output")
+            return False
+        session.addOutput_(output)
+        session.commitConfiguration()
+        # audioSettings is silently ignored unless set after the output has
+        # joined the session.
+        output.setAudioSettings_(self._SETTINGS)
+
+        self._session = session
+        self._output = output
+        self._device_uid = str(device.uniqueID())
         self._prepared = True
-        log.info("AudioRecorder pre-warmed and ready")
+        log.info(f"AudioRecorder ready on '{device.localizedName()}'")
         return True
+
+    def _teardown(self):
+        if self._session is not None and self._session.isRunning():
+            self._session.stopRunning()
+        self._session = None
+        self._output = None
+
+    def _default_device_changed(self):
+        current = AVFoundation.AVCaptureDevice.defaultDeviceWithMediaType_(AVFoundation.AVMediaTypeAudio)
+        return current is not None and str(current.uniqueID()) != self._device_uid
 
     def start(self):
         if not self._prepared:
-            # Fallback: prepare inline (e.g. if background pre-warm failed)
             log.warning("start() called without prior prepare() — initialising inline")
             if not self.prepare():
                 return False
+        # In system-default mode the default may have changed since
+        # prepare() ran (e.g. AirPods connected) — follow it.
+        elif self.input_device == DEFAULT_INPUT_DEVICE and self._default_device_changed():
+            log.info("Default input device changed — rebuilding session")
+            if not self.prepare():
+                return False
 
-        self.recorder.setMeteringEnabled_(True)
+        self._session.startRunning()
+        if not self._session.isRunning():
+            log.error("AVCaptureSession failed to start")
+            return False
 
-        success = self.recorder.record()
-        if success:
-            self._start_time = time.time()
-            self._prepared = False  # recorder is now active; prepare() needed next time
-            log.info("Recording started")
-        else:
-            log.error("recorder.record() returned False")
-        return success
+        self._delegate = _RecordingDelegate.alloc().init()
+        self._output.startRecordingToOutputFileURL_outputFileType_recordingDelegate_(
+            Foundation.NSURL.fileURLWithPath_(self.filepath),
+            AVFoundation.AVFileTypeWAVE,
+            self._delegate,
+        )
+        self._start_time = time.time()
+        self._recording = True
+        self._prepared = False  # session is in use; prepare() needed next time
+        log.info("Recording started")
+        return True
 
     def get_level(self):
         """Return normalized audio level 0.0 (silence) to 1.0 (maximum)."""
-        if not self.recorder or not self.recorder.isRecording():
+        output = self._output
+        if output is None or not output.isRecording():
             return 0.0
-        self.recorder.updateMeters()
-        db = self.recorder.averagePowerForChannel_(0)
-        # AVAudioRecorder reports dB from ~-160 (silence) to 0 (max).
+        connections = output.connections()
+        channels = connections[0].audioChannels() if connections else None
+        if not channels:
+            return 0.0
+        db = channels[0].averagePowerLevel()
+        # Reported in dB from ~-160 (silence) to 0 (max).
         # Map the -60 dB to 0 dB range → 0.0 to 1.0 (anything quieter reads as 0).
         MIN_DB = -60.0
         clamped = max(MIN_DB, min(0.0, float(db)))
         return (clamped - MIN_DB) / (-MIN_DB)
 
     def stop(self):
+        """Stop recording and return (filepath, duration).
+
+        The file is finalised asynchronously — call wait_until_finalized()
+        from a background thread before reading it.
+        """
         duration = 0
-        if self.recorder:
-            if self.recorder.isRecording():
-                self.recorder.stop()
-            if self._start_time:
-                duration = time.time() - self._start_time
+        if self._recording:
+            # isRecording() stays False until the first sample lands (~20 ms),
+            # so rely on our own flag or a very short tap would never stop.
+            self._output.stopRecording()
+            self._recording = False
+            duration = time.time() - self._start_time
         log.info(f"Recording stopped. Duration: {duration:.1f}s, File: {self.filepath}")
         return self.filepath, duration
 
+    def wait_until_finalized(self, timeout=3.0):
+        """Block until the recording file is fully written.
+
+        The finish callback is delivered on the main thread, so this must
+        never be called from there.
+        """
+        delegate = self._delegate
+        if delegate is None:
+            return True
+        if not delegate.finished.wait(timeout):
+            log.warning("Timed out waiting for the recording file to finalise")
+            return False
+        if delegate.error:
+            log.error(f"Recording finished with error: {delegate.error}")
+            return False
+        return True
+
     def cleanup(self):
-        if self.filepath and os.path.exists(self.filepath):
+        if os.path.exists(self.filepath):
             try:
                 os.remove(self.filepath)
             except OSError:
@@ -348,26 +466,14 @@ class ClipboardPaster:
 
         time.sleep(0.1)
 
-        try:
-            import Quartz
-            event = Quartz.CGEventCreateKeyboardEvent(None, 0x09, True)
-            Quartz.CGEventSetFlags(event, Quartz.kCGEventFlagMaskCommand)
-            Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+        event = Quartz.CGEventCreateKeyboardEvent(None, 0x09, True)
+        Quartz.CGEventSetFlags(event, Quartz.kCGEventFlagMaskCommand)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
-            event = Quartz.CGEventCreateKeyboardEvent(None, 0x09, False)
-            Quartz.CGEventSetFlags(event, Quartz.kCGEventFlagMaskCommand)
-            Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
-            log.info("Simulated Cmd+V via Quartz")
-        except ImportError:
-            src = AppKit.CGEventSourceCreate(AppKit.kCGEventSourceStateHIDSystemState)
-            cmd_down = AppKit.CGEventCreateKeyboardEvent(src, 0x09, True)
-            AppKit.CGEventSetFlags(cmd_down, AppKit.kCGEventFlagMaskCommand)
-            AppKit.CGEventPost(AppKit.kCGHIDEventTap, cmd_down)
-
-            cmd_up = AppKit.CGEventCreateKeyboardEvent(src, 0x09, False)
-            AppKit.CGEventSetFlags(cmd_up, AppKit.kCGEventFlagMaskCommand)
-            AppKit.CGEventPost(AppKit.kCGHIDEventTap, cmd_up)
-            log.info("Simulated Cmd+V via AppKit")
+        event = Quartz.CGEventCreateKeyboardEvent(None, 0x09, False)
+        Quartz.CGEventSetFlags(event, Quartz.kCGEventFlagMaskCommand)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+        log.info("Simulated Cmd+V")
 
         # Restore clipboard in a background thread so the caller is unblocked
         # immediately after Cmd+V fires.  The 1s delay gives slow apps (Slack,
@@ -559,6 +665,7 @@ class PreferencesWindowController(AppKit.NSObject):
         self._cleanup_capture()
         self._config["hotkey_keycode"] = self._pending_keycode
         self._config["model"] = self._model_popup.titleOfSelectedItem()
+        self._config["input_device"] = self._mic_uids[self._mic_popup.indexOfSelectedItem()]
         lang = self._language_field.stringValue().strip()
         self._config["language"] = lang if lang else "en"
         api_key = self._api_key_field.stringValue().strip()
@@ -601,7 +708,7 @@ class PreferencesWindowController(AppKit.NSObject):
         # the user actually replaced the key or left it unchanged.
         self._display_key = _truncate_api_key(keychain_get_api_key())
 
-        WIN_W, WIN_H = 440, 300
+        WIN_W, WIN_H = 440, 340
         # NSWindowStyleMask: Titled=1, Closable=2, Miniaturizable=4
         WIN_STYLE = 1 | 2 | 4
 
@@ -624,9 +731,9 @@ class PreferencesWindowController(AppKit.NSObject):
         content = self._window.contentView()
 
         # "API Key:" label + text field
-        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 243, 80, 22), "API Key:"))
+        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 283, 80, 22), "API Key:"))
         self._api_key_field = AppKit.NSTextField.alloc().initWithFrame_(
-            Foundation.NSMakeRect(108, 240, 312, 24)
+            Foundation.NSMakeRect(108, 280, 312, 24)
         )
         self._api_key_field.setEditable_(True)
         self._api_key_field.setSelectable_(True)
@@ -637,13 +744,13 @@ class PreferencesWindowController(AppKit.NSObject):
         content.addSubview_(self._api_key_field)
 
         # "Model:" label + popup button
-        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 203, 80, 22), "Model:"))
+        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 243, 80, 22), "Model:"))
         self._model_popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            Foundation.NSMakeRect(108, 199, 240, 26), False
+            Foundation.NSMakeRect(108, 239, 240, 26), False
         )
-        for m in ["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"]:
+        for m in ["gpt-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"]:
             self._model_popup.addItemWithTitle_(m)
-        current_model = config.get("model", "gpt-4o-mini-transcribe")
+        current_model = config.get("model", "gpt-transcribe")
         # NOTE: selectItemWithTitle_ returns void (None), not a success flag,
         # so we must look up the index ourselves.  indexOfItemWithTitle_
         # returns -1 when the model isn't in the list.
@@ -652,6 +759,28 @@ class PreferencesWindowController(AppKit.NSObject):
             model_index = 0
         self._model_popup.selectItemAtIndex_(model_index)
         content.addSubview_(self._model_popup)
+
+        # "Microphone:" label + popup button.  Items are added via the menu
+        # directly because NSPopUpButton.addItemWithTitle_ de-duplicates
+        # titles, which would misalign two identically-named devices.
+        content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 203, 80, 22), "Microphone:"))
+        self._mic_popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            Foundation.NSMakeRect(108, 199, 240, 26), False
+        )
+        self._mic_uids = [DEFAULT_INPUT_DEVICE]
+        titles = ["System default"]
+        for uid, name in list_input_devices():
+            self._mic_uids.append(uid)
+            titles.append(name)
+        current_mic = config.get("input_device", DEFAULT_INPUT_DEVICE)
+        if current_mic not in self._mic_uids:
+            # Keep a disconnected device selectable so Save doesn't drop it.
+            self._mic_uids.append(current_mic)
+            titles.append(f"{current_mic} (not connected)")
+        for title in titles:
+            self._mic_popup.menu().addItemWithTitle_action_keyEquivalent_(title, None, "")
+        self._mic_popup.selectItemAtIndex_(self._mic_uids.index(current_mic))
+        content.addSubview_(self._mic_popup)
 
         # "Language:" label + text field + hint
         content.addSubview_(self._make_label(Foundation.NSMakeRect(20, 163, 80, 22), "Language:"))
@@ -781,7 +910,7 @@ class WhisperDictateApp:
 
     def __init__(self, config):
         self.config = config
-        self.recorder = AudioRecorder()
+        self.recorder = AudioRecorder(config.get("input_device", DEFAULT_INPUT_DEVICE))
         self.recording = False
         self.processing = False
         self.monitor = None
@@ -846,9 +975,7 @@ class WhisperDictateApp:
         self._check_accessibility()
         self._check_api_key()
 
-        # Pre-warm the audio pipeline in the background so the first recording
-        # on any input device (especially headsets) starts without a delay.
-        threading.Thread(target=self.recorder.prepare, daemon=True).start()
+        self.recorder.prepare()
 
     def _setup_edit_menu(self):
         """Add a minimal Edit menu to the application main menu.
@@ -974,6 +1101,11 @@ class WhisperDictateApp:
     def _on_preferences_saved(self, new_config):
         """Called by PreferencesWindowController after the user clicks Save."""
         self.config = new_config
+        self.recorder.input_device = new_config.get("input_device", DEFAULT_INPUT_DEVICE)
+        # If a recording is in flight, the prepare() that follows it picks up
+        # the new device instead.
+        if not self.recording and not self.processing:
+            self.recorder.prepare()
         # Remove old event monitors before re-registering with the new keycode
         if self.monitor:
             AppKit.NSEvent.removeMonitor_(self.monitor)
@@ -1083,13 +1215,13 @@ class WhisperDictateApp:
 
         if duration < 0.3:
             log.warning(f"Recording too short ({duration:.1f}s), skipping")
-            self.recorder.cleanup()
             self._reset_ui()
-            threading.Thread(target=self.recorder.prepare, daemon=True).start()
+            threading.Thread(target=self._discard_recording, daemon=True).start()
             return
 
         def process():
             try:
+                self.recorder.wait_until_finalized()
                 text = transcribe(filepath, self.config)
                 self.recorder.cleanup()
 
@@ -1104,10 +1236,15 @@ class WhisperDictateApp:
                 # Reset UI as soon as Cmd+V has fired — the clipboard restore
                 # runs in its own background thread so we don't block here.
                 self._perform_on_main(self._reset_ui)
-                threading.Thread(target=self.recorder.prepare, daemon=True).start()
+                self._perform_on_main(self.recorder.prepare)
 
         thread = threading.Thread(target=process, daemon=True)
         thread.start()
+
+    def _discard_recording(self):
+        self.recorder.wait_until_finalized()
+        self.recorder.cleanup()
+        self._perform_on_main(self.recorder.prepare)
 
     def _reset_ui(self):
         self.processing = False

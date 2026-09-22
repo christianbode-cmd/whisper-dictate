@@ -93,6 +93,7 @@ xattr -cr "/Applications/Whisper Dictate.app"
 Click the 🎙 menubar icon → **Preferences…** (or press **Cmd+,**) to change:
 
 - **API Key** — update your OpenAI key without editing files
+- **Microphone** — record from a specific input device instead of the system default. With AirPods or other Bluetooth headsets the first half-second of speech is lost while macOS switches Bluetooth profiles; selecting the built-in microphone avoids this
 - **Hotkey** — click the button and press any key or modifier to rebind
 
 Changes take effect immediately after clicking Save.
@@ -107,7 +108,8 @@ The API key is stored in the macOS Keychain (not in `config.json`) and can be ma
 
 | Setting | Default | Description |
 |---|---|---|
-| `model` | `gpt-4o-mini-transcribe` | Transcription model |
+| `model` | `gpt-transcribe` | Transcription model |
+| `input_device` | `default` | Microphone: `default` follows the system input, or a device unique ID (pick it in Preferences) |
 | `hotkey_keycode` | `58` | Trigger key (58 = Left Option ⌥) |
 | `language` | `en` | Language hint passed to the API |
 | `sound_on_start` | `true` | Play a sound when recording starts |
@@ -128,7 +130,9 @@ The API key is stored in the macOS Keychain (not in `config.json`) and can be ma
 
 ## Cost
 
-`gpt-4o-transcribe` costs approximately $0.006 per minute of audio. A typical 10-second dictation costs under $0.001.
+`gpt-4o-transcribe` is priced at $2.50 per 1M input tokens and $10 per 1M output tokens (audio input, text output). A typical 10-second dictation costs a fraction of a cent.
+
+`gpt-transcribe`, the new default model, costs approximately $0.0045 per minute of audio.
 
 ---
 
@@ -138,11 +142,18 @@ If you edit `whisper_dictate.py`:
 
 ```bash
 ./build_app.sh
-cp -R "dist/Whisper Dictate.app" /Applications/
+osascript -e 'quit app "Whisper Dictate"'
+rm -rf "/Applications/Whisper Dictate.app" && cp -R "dist/Whisper Dictate.app" /Applications/
 open "/Applications/Whisper Dictate.app"
 ```
 
 Re-granting Accessibility permission is required each time the binary changes (macOS revokes it automatically).
+
+---
+
+## Release notes
+
+See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 
 ---
 

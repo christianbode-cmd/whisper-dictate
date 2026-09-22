@@ -10,7 +10,7 @@ A lightweight macOS menubar app that records your voice, sends it to OpenAI's tr
 
 The easiest way to install on macOS is via the DMG:
 
-1. Download `Blab.dmg` from the [latest release](https://github.com/christianbode-cmd/whisper-dictate/releases/latest)
+1. Download `Blab.dmg` from the [latest release](https://github.com/christianbode-cmd/blab/releases/latest)
 2. Open the DMG and drag **Blab.app** into your **Applications** folder
 3. Launch the app from Applications or Spotlight
 4. If macOS says the app is damaged or unverified, run:
@@ -35,8 +35,8 @@ The easiest way to install on macOS is via the DMG:
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/whisper-dictate.git
-cd whisper-dictate
+git clone https://github.com/YOUR_USERNAME/blab.git
+cd blab
 ```
 
 ### 2. Add your OpenAI API key

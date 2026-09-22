@@ -59,7 +59,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ### Fixed
 - Preferences crash caused by `NSAlert.runModal` during app initialisation.
 
-[1.2.0]: https://github.com/christianbode-cmd/whisper-dictate/compare/v1.1.0...v1.2.0
-[1.1.0]: https://github.com/christianbode-cmd/whisper-dictate/compare/v1.0.1...v1.1.0
-[1.0.1]: https://github.com/christianbode-cmd/whisper-dictate/compare/v1.0.0...v1.0.1
-[1.0.0]: https://github.com/christianbode-cmd/whisper-dictate/releases/tag/v1.0.0
+[1.2.0]: https://github.com/christianbode-cmd/blab/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/christianbode-cmd/blab/compare/v1.0.1...v1.1.0
+[1.0.1]: https://github.com/christianbode-cmd/blab/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/christianbode-cmd/blab/releases/tag/v1.0.0

@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Whisper Dictate are documented here.
+All notable changes to Blab (formerly Whisper Dictate) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [1.2.0] - 2026-09-22
